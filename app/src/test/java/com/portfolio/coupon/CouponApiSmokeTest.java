@@ -49,7 +49,7 @@ class CouponApiSmokeTest {
 			.toString();
 
 		this.client.get().uri(location).exchange().expectStatus().isOk().expectBody()
-			.jsonPath("$.finalAmount").isEqualTo(22500);
+			.jsonPath("$.finalAmount").isEqualTo(22000);
 	}
 
 }

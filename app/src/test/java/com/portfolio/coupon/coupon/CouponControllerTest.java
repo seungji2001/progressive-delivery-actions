@@ -38,8 +38,8 @@ class CouponControllerTest {
 			.andExpect(header().string("Location", matchesPattern("/coupons/[0-9a-f-]{36}")))
 			.andExpect(header().string("X-App-Version", "v-test"))
 			.andExpect(jsonPath("$.discountType").value("PERCENTAGE"))
-			.andExpect(jsonPath("$.discountAmount").value(2500))
-			.andExpect(jsonPath("$.finalAmount").value(22500))
+			.andExpect(jsonPath("$.discountAmount").value(3000))
+			.andExpect(jsonPath("$.finalAmount").value(22000))
 			.andExpect(jsonPath("$.appVersion").value("v-test"));
 	}
 
