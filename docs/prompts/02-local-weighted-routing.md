@@ -11,7 +11,7 @@
 너는 컨테이너 기반 점진적 배포(Blue-Green, 카나리)를 설계해 본 시니어 플랫폼 엔지니어다. 클라우드에 올리기 전에 로컬에서 트래픽 전환·지표 판정·롤백 개념을 재현하고, 이후 AWS(ALB weighted target group) 구현과 1:1로 대응되는 구조를 만든다.
 
 ## Context
-- 프로젝트: `progressive-delivery-actions` (`/Users/seungjibaek/Desktop/applyment/progressive-delivery-actions`). 먼저 루트 `README.md`, `docs/prompts/01-coupon-api-v1.md`, `app/README.md`를 읽는다.
+- 프로젝트: `progressive-delivery-actions` (`레포 루트`). 먼저 루트 `README.md`, `docs/prompts/01-coupon-api-v1.md`, `app/README.md`를 읽는다.
 - **1단계 산출물(전제 인터페이스):** 포트 8080, `GET /health/readiness`, `GET /version`(version/commit/startedAt/hostname), 모든 응답에 `X-App-Version`, `FAULT_RATE`로 `/coupons/**`에 실제 HTTP 500, graceful shutdown 20s, Dockerfile `ARG APP_VERSION`/`ARG GIT_SHA`, arm64, 이미지에 curl·HEALTHCHECK 없음.
 - **사전 조건:** `git tag -l v1.0.0`이 있고 `app/`에 커밋되지 않은 변경이 없어야 한다.
 - 범위: (a) v2 정률 할인 코드, (b) 로컬 compose + nginx 가중치 환경, (c) 가중치 전환·Blue-Green·카나리 데모 스크립트, (d) 부하 생성·요약 스크립트, (e) `monitor/` 정적 페이지.

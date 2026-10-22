@@ -7,7 +7,7 @@
 
 ## Context
 - 프로젝트: `progressive-delivery-actions` — GitHub Actions로 Blue-Green/카나리 배포(자동 롤백 포함)를 오케스트레이션하는 클라우드 엔지니어링 포트폴리오.
-  - 레포 경로: `/Users/seungjibaek/Desktop/applyment/progressive-delivery-actions`
+  - 레포 경로: `레포 루트`
   - 설계 원본: 레포 루트 `README.md` — 먼저 읽는다.
 - 이번 작업은 **1단계: `app/` 디렉토리에 쿠폰 발급 API v1 + Dockerfile + 테스트**를 만드는 것이다.
 - 이 앱을 이후 단계에서 어떻게 쓰는지(지금 맞춰야 하는 인터페이스):

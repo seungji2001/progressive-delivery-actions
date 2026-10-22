@@ -13,7 +13,7 @@ tools: Read, Grep, Glob
 # Core Principles & Guidelines
 1. **레포지토리 컨텍스트 반영:**
    - **프로젝트 성격:** 클라우드 엔지니어링 포트폴리오. 주제는 "GitHub Actions를 활용한 Blue-Green 및 카나리 배포 경험". 평가 대상은 서비스 기능이 아니라 **배포 파이프라인이 실패를 어떻게 다루는가**다.
-   - **레포:** 별도 GitHub 레포 `progressive-delivery-actions` (로컬: `/Users/seungjibaek/Desktop/applyment/progressive-delivery-actions`). 설계 원본은 레포 루트 `README.md` — 프롬프트 작성 전 필요하면 반드시 Read로 최신 내용을 확인해라.
+   - **레포:** 별도 GitHub 레포 `progressive-delivery-actions` . 설계 원본은 레포 루트 `README.md` — 프롬프트 작성 전 필요하면 반드시 Read로 최신 내용을 확인해라.
    - **디렉토리 계획:** `app/`(쿠폰 API + Dockerfile + 테스트), `monitor/`(버전 비율 실시간 모니터 정적 페이지), `infra/terraform/`(VPC, ALB, ECS, ECR, CloudWatch, OIDC Role), `.github/workflows/`(ci.yml, blue-green.yml, canary.yml, destroy.yml), `scripts/`(가중치 전환, 지표 게이트, 부하 생성), `docs/`(다이어그램, 시연 GIF, 회고, 단계별 프롬프트 `docs/prompts/`).
    - **확정 기술 스택:** AWS, Spring Boot(Java 21, Gradle, Spring Boot 4.1, Actuator), Docker, ECS Fargate, ALB, ECR, CloudWatch, Terraform, GitHub Actions.
    - **데모 서비스(쿠폰 발급 API):** `POST /coupons/issue`, `GET /coupons/{id}`, `GET /version`, `GET /health`, 모든 응답에 `X-App-Version` 헤더. 인메모리 저장소(DB 없음).
