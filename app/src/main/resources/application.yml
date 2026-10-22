@@ -18,7 +18,8 @@ app:
   commit: ${GIT_SHA:unknown}
 
 coupon:
-  fixed-amount: ${COUPON_FIXED_AMOUNT:3000}
+  percent: ${COUPON_PERCENT:10}
+  max-discount-amount: ${COUPON_MAX_DISCOUNT_AMOUNT:5000}
   min-order-amount: ${COUPON_MIN_ORDER_AMOUNT:10000}
 
 fault:

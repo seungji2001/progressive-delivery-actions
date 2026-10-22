@@ -5,6 +5,16 @@ Blue-Green / 카나리 배포 시연용 쿠폰 발급 API. 기능은 최소로 �
 - Java 21 · Spring Boot 4.1 · Gradle (Kotlin DSL)
 - 인메모리 저장소 (DB 없음)
 
+## 릴리즈
+
+| 태그 | 할인 정책 | 비고 |
+| --- | --- | --- |
+| `v1.0.0` | 정액 할인 (`FixedAmountDiscountPolicy`, 기본 3,000원) | `COUPON_FIXED_AMOUNT` |
+| `v2.0.0` | 정률 할인 (`PercentageDiscountPolicy`, 기본 10%, 최대 5,000원) | 정액 구현은 삭제됨 |
+
+- 릴리즈 단위 = git 태그 = 이미지 태그 = `APP_VERSION`. 정책을 빌드 인자나 기능 플래그로 고르지 않는다. 롤백은 코드가 아니라 **이전 이미지**로 한다.
+- **API 스키마는 버전 간에 동일하다**(필드명·타입 같고 값만 다름). 카나리 중에는 두 버전이 동시에 응답하므로 스키마 호환이 배포 안전성의 전제다.
+
 ## 엔드포인트
 
 | Method | Path | 설명 | 장애 주입 대상 |
@@ -32,7 +42,8 @@ curl -X POST localhost:8080/coupons/issue \
 | `APP_VERSION` | build-info 버전 | 응답·헤더·로그에 노출할 버전. CI 가 `--build-arg` 로 주입 |
 | `GIT_SHA` | `unknown` | 빌드 커밋 |
 | `FAULT_RATE` | `0.0` | `/coupons/**` 에 500 을 낼 확률 (0.0~1.0). 범위 밖이면 기동 실패 |
-| `COUPON_FIXED_AMOUNT` | `3000` | 정액 할인 금액(원) |
+| `COUPON_PERCENT` | `10` | 정률 할인 비율(1~100). v2 부터 |
+| `COUPON_MAX_DISCOUNT_AMOUNT` | `5000` | 최대 할인 금액(원). v2 부터 |
 | `COUPON_MIN_ORDER_AMOUNT` | `10000` | 최소 주문 금액(원) |
 
 ## 실행

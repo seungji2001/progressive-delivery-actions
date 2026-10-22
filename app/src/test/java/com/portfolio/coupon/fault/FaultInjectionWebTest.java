@@ -12,7 +12,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import com.portfolio.coupon.coupon.CouponProperties;
 import com.portfolio.coupon.coupon.CouponRepository;
 import com.portfolio.coupon.coupon.CouponService;
-import com.portfolio.coupon.coupon.FixedAmountDiscountPolicy;
+import com.portfolio.coupon.coupon.PercentageDiscountPolicy;
 import com.portfolio.coupon.version.AppProperties;
 import com.portfolio.coupon.version.VersionInfo;
 
@@ -24,7 +24,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(properties = { "fault.rate=1.0", "app.version=v-fault" })
-@Import({ CouponService.class, CouponRepository.class, FixedAmountDiscountPolicy.class, VersionInfo.class,
+@Import({ CouponService.class, CouponRepository.class, PercentageDiscountPolicy.class, VersionInfo.class,
 		FaultInjector.class })
 @EnableConfigurationProperties({ CouponProperties.class, AppProperties.class, FaultProperties.class })
 class FaultInjectionWebTest {

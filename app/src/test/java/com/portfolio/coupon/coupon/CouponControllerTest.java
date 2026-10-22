@@ -23,7 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(properties = "app.version=v-test")
-@Import({ CouponService.class, CouponRepository.class, FixedAmountDiscountPolicy.class, VersionInfo.class,
+@Import({ CouponService.class, CouponRepository.class, PercentageDiscountPolicy.class, VersionInfo.class,
 		FaultInjector.class })
 @EnableConfigurationProperties({ CouponProperties.class, AppProperties.class, FaultProperties.class })
 class CouponControllerTest {
@@ -37,9 +37,9 @@ class CouponControllerTest {
 			.andExpect(status().isCreated())
 			.andExpect(header().string("Location", matchesPattern("/coupons/[0-9a-f-]{36}")))
 			.andExpect(header().string("X-App-Version", "v-test"))
-			.andExpect(jsonPath("$.discountType").value("FIXED"))
-			.andExpect(jsonPath("$.discountAmount").value(3000))
-			.andExpect(jsonPath("$.finalAmount").value(22000))
+			.andExpect(jsonPath("$.discountType").value("PERCENTAGE"))
+			.andExpect(jsonPath("$.discountAmount").value(2500))
+			.andExpect(jsonPath("$.finalAmount").value(22500))
 			.andExpect(jsonPath("$.appVersion").value("v-test"));
 	}
 
