@@ -1,0 +1,49 @@
+spring:
+  application:
+    name: coupon-api
+  lifecycle:
+    # ALB deregistration_delay / ECS stopTimeout 보다 짧게 유지해야 다운타임 0
+    timeout-per-shutdown-phase: 20s
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: 8080
+  shutdown: graceful
+
+app:
+  # 비어 있으면 build-info 버전을 사용
+  version: ${APP_VERSION:}
+  commit: ${GIT_SHA:unknown}
+
+coupon:
+  fixed-amount: ${COUPON_FIXED_AMOUNT:3000}
+  min-order-amount: ${COUPON_MIN_ORDER_AMOUNT:10000}
+
+fault:
+  # 0.0 ~ 1.0, /coupons/** 에만 적용
+  rate: ${FAULT_RATE:0.0}
+
+management:
+  endpoints:
+    web:
+      base-path: /
+      discovery:
+        enabled: false
+      exposure:
+        include: health
+      path-mapping:
+        health: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        version: ${APP_VERSION:unknown}
