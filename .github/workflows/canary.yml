@@ -12,7 +12,7 @@ on:
         options: [deploy, recover]
         default: deploy
       image_tag:
-        description: "배포할 이미지 태그 (deploy 모드, 예: v2.1.0)"
+        description: "배포할 이미지 태그 (deploy 모드, 예: v2.1.1)"
         default: ""
       steps:
         description: "승인 전 카나리 단계(%) — 100 은 승인 후 promote 에서"
@@ -21,7 +21,7 @@ on:
         description: "후보에만 주입할 FAULT_RATE (5xx 롤백 시연)"
         default: "0"
       fault_delay_ms:
-        description: "후보에만 주입할 FAULT_DELAY_MS (p95 롤백 시연, v2.1.0+)"
+        description: "후보에만 주입할 FAULT_DELAY_MS (p95 롤백 시연, v2.1.1+)"
         default: "0"
 
 permissions: {}

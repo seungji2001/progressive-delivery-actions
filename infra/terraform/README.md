@@ -28,14 +28,15 @@ infra/terraform/
 aws sso login --profile <admin-profile>; export AWS_PROFILE=<admin-profile>
 
 # 1) bootstrap — 로컬 state 로 최초 apply
+#    state 버킷이 아직 없으므로 versions.tf 의 `backend "s3" {}` 를 먼저 주석 처리한다 (# backend "s3" {})
 cd infra/terraform/bootstrap
-cp bootstrap.tfvars.example bootstrap.tfvars   # github_owner, state_bucket_name, email 수정
+cp bootstrap.tfvars.example bootstrap.tfvars   # github_owner, github_oidc_sub_prefix, state_bucket_name, email 수정
 terraform init
 terraform plan  -var-file=bootstrap.tfvars
 terraform apply -var-file=bootstrap.tfvars
 
 # 2) bootstrap state 를 S3 로 이전
-#    versions.tf 의 `# backend "s3" {}` 주석 해제 후
+#    versions.tf 의 backend 블록 주석을 다시 해제한 뒤 (레포에는 해제된 상태로 커밋돼 있다)
 terraform init -migrate-state \
   -backend-config="bucket=<state_bucket_name>" -backend-config="key=bootstrap/terraform.tfstate" \
   -backend-config="region=ap-northeast-2" -backend-config="use_lockfile=true" -backend-config="encrypt=true"
@@ -101,7 +102,7 @@ NAT Gateway 를 쓰지 않는 것이 핵심이다. 아래 단가는 서울 리�
 | --- | --- | --- |
 | `pda-gha-ci` | `ref:refs/heads/main`, `ref:refs/tags/v*` | ECR push (해당 리포지토리만) |
 | `pda-gha-deploy` | `environment:preview`, `environment:production` | 태스크 정의 등록, `pda-*` 서비스 업데이트, `pda-alb` 리스너 수정, 지표 조회, SSM 포인터, `pda-ecs-*` PassRole |
-| `pda-gha-infra` | `environment:infra` | runtime 스택 리소스 + state `runtime/*` 키. 범위가 넓은 대신 environment 승인으로 보완 |
+| `pda-gha-infra` | `environment:infra` | runtime 스택 리소스 + state `runtime/*` 키. `pda-ecs-*` Role 에는 ECS 실행 정책만 붙일 수 있고 인라인 정책은 쓸 수 없다(권한 상승 방지). 나머지 넓은 범위는 environment 승인으로 보완 |
 
 - `pull_request` 이벤트에는 어떤 Role 도 허용하지 않는다(포크 PR 이 AWS 에 접근하지 못함).
 - job 에 `environment:` 가 있으면 OIDC 토큰의 sub 가 `<prefix>:environment:<name>` 형식이 된다.
@@ -130,7 +131,7 @@ NAT Gateway 를 쓰지 않는 것이 핵심이다. 아래 단가는 서울 리�
 terraform fmt -check -recursive
 (cd bootstrap && terraform init -backend=false && terraform validate)
 (cd runtime   && terraform init -backend=false && terraform validate)
-docker run --rm -v "$PWD":/src aquasec/trivy:latest config --severity HIGH,CRITICAL /src
+docker run --rm -v "$PWD":/src aquasec/trivy:0.70.0 config --severity HIGH,CRITICAL /src
 ```
 
 Trivy 결과: 조치 1건(`drop_invalid_header_fields = true`), 수용 4건은 코드에 `#trivy:ignore` 와 사유를 남겼다.

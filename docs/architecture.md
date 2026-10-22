@@ -115,13 +115,14 @@ flowchart LR
 
 - **왜 스택을 나눴나** — Role 과 ECR 을 runtime 과 함께 지우면 `destroy.yml` 이 다음 번에 자기 자신을 실행할 권한을 잃고, 롤백 대상 이미지도 사라진다. bootstrap 은 사용량 과금뿐이라 비용이 거의 0 이다.
 - **PR 차단** — 신뢰 정책 어디에도 `pull_request` sub 가 없다. 포크 PR 이 AWS 에 접근할 수 없다.
+- **infra Role 권한 상승 방지** — infra Role 은 `pda-ecs-*` Role 을 만들 수 있다. 처음에는 붙일 정책에 제한이 없어 "관리자 정책 Role 을 만들어 태스크로 실행"하는 경로가 있었다. 독립 점검에서 발견해 `iam:PolicyARN` 조건으로 ECS 실행 정책만 허용하고 `PutRolePolicy` 를 제거했다. 남은 위험: `ecs:*`·`ec2:*` 등 서비스 범위는 여전히 넓어 `infra` 승인에 의존한다. 운영 환경이라면 permissions boundary 와 리소스 태그 조건을 더한다. (코드 반영, AWS 재적용은 하지 않음 — bootstrap 삭제 상태)
 - **immutable subject** — sub 에 owner·repo 숫자 ID 가 들어 있어, 레포를 지우고 같은 이름으로 다시 만들어도 Role 을 가로챌 수 없다([troubleshooting #2](troubleshooting.md#2-oidc-assumerole-이-거부됐다-immutable-subject)).
 
 | Role | 허용 sub | 권한 범위 | 보호 장치 |
 | --- | --- | --- | --- |
 | `pda-gha-ci` | `ref:refs/heads/main`, `ref:refs/tags/v*` | ECR push (해당 리포지토리만), `GetAuthorizationToken` | 브랜치·태그 조건, Trivy CRITICAL 차단 후에만 push |
 | `pda-gha-deploy` | `environment:preview`, `environment:production` | 태스크 정의 등록, `service/pda-cluster/pda-*` 업데이트, `listener/app/pda-alb/*` 수정, 지표·알람 조회, SSM 파라미터 1개, `role/pda-ecs-*` PassRole(ecs-tasks 한정) | 100% 전환은 `production` 승인 뒤에만 |
-| `pda-gha-infra` | `environment:infra` | runtime 서비스 계열(region 조건), `pda-ecs-*` Role, state `runtime/*` 키 | `infra` 승인 + `confirm=destroy-runtime` 입력 |
+| `pda-gha-infra` | `environment:infra` | runtime 서비스 계열(region 조건), `pda-ecs-*` Role 생성·삭제(붙일 수 있는 정책은 `AmazonECSTaskExecutionRolePolicy` 하나, 인라인 정책 작성 불가), state `runtime/*` 키 | `infra` 승인 + `confirm=destroy-runtime` 입력 |
 
 출처: `infra/terraform/bootstrap/iam_github.tf`, `ecr.tf`, `state.tf`, `.github/workflows/*.yml` (`environment`, `role-to-assume`, `permissions`)
 

@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "다시 빌드할 기존 태그 (예: v1.0.0)"
+        description: "다시 빌드할 기존 태그 (예: v1.0.1)"
         required: true
 
 permissions: {}

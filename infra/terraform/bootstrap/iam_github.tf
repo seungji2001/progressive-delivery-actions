@@ -227,24 +227,47 @@ data "aws_iam_policy_document" "infra" {
   }
 
   statement {
+    # 권한 상승 방지: 이 Role 은 pda-ecs-* Role 을 만들 수 있으므로, 붙일 수 있는 정책과
+    # 인라인 정책 작성을 막지 않으면 "관리자 정책을 붙인 Role 을 만들어 태스크로 실행" 경로가 생긴다.
+    # → 인라인 정책 작성(PutRolePolicy) 은 허용하지 않고, 관리형 정책은 ECS 실행 정책 하나만 붙일 수 있다.
     sid = "TaskRoles"
     actions = [
-      "iam:AttachRolePolicy",
       "iam:CreateRole",
       "iam:DeleteRole",
       "iam:DeleteRolePolicy",
-      "iam:DetachRolePolicy",
       "iam:GetRole",
       "iam:GetRolePolicy",
       "iam:ListAttachedRolePolicies",
       "iam:ListInstanceProfilesForRole",
       "iam:ListRolePolicies",
-      "iam:PassRole",
-      "iam:PutRolePolicy",
       "iam:TagRole",
       "iam:UntagRole",
     ]
     resources = ["arn:aws:iam::${local.account_id}:role/${local.p}-ecs-*"]
+  }
+
+  statement {
+    sid       = "TaskRolePolicyAttachOnlyEcsExecution"
+    actions   = ["iam:AttachRolePolicy", "iam:DetachRolePolicy"]
+    resources = ["arn:aws:iam::${local.account_id}:role/${local.p}-ecs-*"]
+
+    condition {
+      test     = "ArnEquals"
+      variable = "iam:PolicyARN"
+      values   = ["arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"]
+    }
+  }
+
+  statement {
+    sid       = "PassTaskRolesToEcsOnly"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${local.account_id}:role/${local.p}-ecs-*"]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
   }
 
   statement {

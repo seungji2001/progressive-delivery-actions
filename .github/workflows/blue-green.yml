@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "배포할 이미지 태그 (예: v2.0.0)"
+        description: "배포할 이미지 태그 (예: v2.0.1)"
         required: true
       observe_seconds:
         description: "전환 후 관찰 시간(초)"

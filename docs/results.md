@@ -15,7 +15,7 @@
 | 3 | 카나리 후보에 `FAULT_RATE=0.2` | **ROLLED_BACK(fast-guard:5xx)** | 10% 단계에서 차단, 전체 5xx 1.89% |
 | 4 | 카나리 후보에 `FAULT_DELAY_MS=800` | **ROLLED_BACK(p95)** | CloudWatch p95 **805ms** > 500ms, 10% 단계에서 차단 |
 | 5 | 카나리 `v2.0.1 → v2.1.1` | **PROMOTED** | 10 → 50 → 승인 → 50 재판정 → 100, 요청 4,455건 / **실패 0** |
-| 6 | 카나리 `v2.1.1 → v3.0.0` (**실제 코드 결함**, 주입 없음) | **ROLLED_BACK(fast-guard:5xx)** | 10% 전환 → 감지 **60s** → 원복 **7s** |
+| 6 | 카나리 `v2.1.1 → v3.0.0` (**시연용으로 심은 코드 결함**, 플래그 주입 없음) | **ROLLED_BACK(fast-guard:5xx)** | 10% 전환 → 감지 **60s** → 원복 **7s** |
 
 ## 1. Blue-Green 승격
 
@@ -34,10 +34,10 @@
 05:32:57  listener weights: blue=100 green=0      ← 후보(blue, v1.0.1) 100% 전환
 05:33:12  fast guard: samples 37, 5xx 19           ← 15s 만에 감지
 05:33:20  listener weights: blue=0 green=100      ← 원복 (stable = green, v2.0.1)
-05:33:26  마지막 후보 응답                           ← 사용자 영향 종료
+05:33:26  마지막 후보 응답                           ← 결함 버전 응답 종료
 ```
 
-- 사용자 영향 구간 **18.9s**, 전체 576건 중 5xx 71건. 원복 후 `traffic-state` = `consistent=true`.
+- 결함 버전 응답 구간 **18.9s** — 러너 부하 CSV 에서 후보(`v1.0.1`)의 **첫 응답부터 마지막 응답까지**. 전환 시각(05:32:57)부터 마지막 후보 응답(05:33:26)까지는 29s 다(전환 직후 수 초는 리스너 반영·연결 재사용으로 후보 응답이 아직 없다). 전체 576건 중 5xx 71건. 원복 후 `traffic-state` = `consistent=true`.
 - 감지 → 원복 8s 의 대부분은 GitHub Actions 의 step 전환 시간이다(실패 step 종료 → 롤백 step 시작). 원복 자체(`modify-listener` + 검증)는 1~2s.
 
 ## 3·4. 카나리 자동 롤백
@@ -51,7 +51,7 @@
 
 **관찰**
 - 같은 시점 CloudWatch 는 60초 창에 요청 3~4건만 집계했다(지표 수집 지연). 서버 측 지표만으로는 판정할 수 없는 구간을 클라이언트 측 fast guard 가 메웠다.
-- 다만 fast guard 감지에도 **123s** 가 걸렸다. 10% 단계에서 후보는 약 1 rps 만 받는데 fast guard 창이 30s 라 최소 표본(20)을 채우기 어려웠다. → **개선**: 카나리에서는 fast guard 창을 120s 로 넓혔다 (`FAST_GUARD_WINDOW`) → [6번 시연](#6-실제-코드-결함-롤백-v300-녹화)에서 **60s** 로 재측정.
+- 다만 fast guard 감지에도 **123s** 가 걸렸다. 10% 단계에서 후보는 약 1 rps 만 받는데 fast guard 창이 30s 라 최소 표본(20)을 채우기 어려웠다. → **개선**: 카나리에서는 fast guard 창을 120s 로 넓혔다 (`FAST_GUARD_WINDOW`) → [6번 시연](#6-코드-결함-롤백-v300-녹화)에서 **60s** (조건이 다른 단일 비교).
 - p95 롤백은 "표본 50건"을 채울 때까지 기다린 뒤 판정했다(57건 시점). 표본 없이 승격하지 않는다는 원칙과, 10% 단계의 낮은 트래픽이 맞물린 결과다.
 
 ## 5. 카나리 승격
@@ -68,11 +68,11 @@
 - 승인 후 바로 100% 로 가지 않고 50% 에서 다시 판정했다 — 승인을 기다리는 동안 아무도 지표를 보지 않았기 때문이다.
 - 러너 부하 합계 4,455건, 실패 0.
 
-## 6. 실제 코드 결함 롤백 (`v3.0.0`, 녹화)
+## 6. 코드 결함 롤백 (`v3.0.0`, 녹화)
 
 ![canary v3 auto rollback](demo/canary-v3-auto-rollback.gif)
 
-**결함** — v3 에 "회원 등급별 추가 할인"을 넣으면서 등급 보너스 표(`Map.of(0, 0L, 1, 500L, 3, 1000L)`)에 **등급 2 를 빠뜨렸다**. 등급 2 사용자는 `NullPointerException` → 500. 장애 주입(`FAULT_*`) 없이 코드 결함만으로 낸 장애다.
+**결함** — 시연을 위해 **일부러 심은** 결함이다. 다만 `FAULT_*` 환경변수 주입이 아니라, 실제로 흔한 형태의 코드 버그로 만들었다. v3 에 "회원 등급별 추가 할인"을 넣으면서 등급 보너스 표(`Map.of(0, 0L, 1, 500L, 3, 1000L)`)에 **등급 2 를 빠뜨렸다**. 등급 2 사용자는 `NullPointerException` → 500. 장애 주입(`FAULT_*`) 없이 코드 결함만으로 낸 장애다.
 
 | 검사 | 결과 | 이유 |
 | --- | --- | --- |
@@ -89,7 +89,8 @@
 ```
 
 - 러너 부하 480건 중 5xx 6건(1.25%) — 10% 노출이 영향 범위를 제한했다. 후보가 응답한 구간은 61s.
-- fast guard 창을 30s → 120s 로 넓힌 뒤의 첫 AWS 측정: 감지 **123s → 60s**.
+- fast guard 창을 30s → 120s 로 넓힌 뒤의 첫 AWS 측정: 감지 **123s → 60s**. 단 비교 대상(3번)과 조건이 다르다 — 3번은 `FAULT_RATE=0.2`, 이번은 사용자 약 25% 가 겪는 결함이고 녹화용 브라우저 부하(약 20 rps)도 더해졌다. 창 확대만의 효과로 단정하지 않는다.
+- 결함 diff: [v2.1.1...v3.0.0](https://github.com/seungji2001/progressive-delivery-actions/compare/v2.1.1...v3.0.0) (브랜치 `release/v3`, main 에는 병합하지 않음)
 - 녹화는 로컬 nginx 프록시(`infra/local/monitor-proxy`)로 모니터 페이지를 ALB 와 같은 오리진에 띄우고 브라우저 트래픽(약 20 rps)을 함께 보냈다. 화면의 5xx 수치는 브라우저 트래픽 기준이다. 차트의 세로 공백은 브라우저 요청이 잠시 없던 1초 구간이다.
 - 이 실행의 정리는 `destroy.yml` 로 했다 — 35 리소스 삭제 성공 (권한 수정 후 실제 삭제 경로 검증 완료).
 - 실행: [39740352525](https://github.com/seungji2001/progressive-delivery-actions/actions/runs/39740352525) · destroy [39741066827](https://github.com/seungji2001/progressive-delivery-actions/actions/runs/39741066827)
@@ -104,9 +105,11 @@
 
 시연 종료 후 bootstrap(S3 state, ECR, IAM Role, OIDC provider, 예산)까지 전부 삭제했다(2026-10-22). 다시 실행하려면 [infra/terraform/README.md](../infra/terraform/README.md) 의 적용 순서대로 bootstrap 부터 만든다.
 
-비용: runtime 을 약 50분 운영 — ALB + Fargate ARM64 1~2 태스크 + public IPv4 기준 시간당 약 $0.08~0.1. 시연 직후 destroy 했다.
+비용: runtime 을 두 번 운영 — 1차(시나리오 1~5) 약 53분, 2차(시나리오 6 녹화) 약 23분, 합계 약 76분(apply 시작 ~ destroy 완료, 로그 기준 근사). ALB + Fargate ARM64 1~2 태스크 + public IPv4 기준 시간당 약 $0.08~0.1 → 약 $0.10~0.13. 매번 시연 직후 destroy 했다.
 
 ## 실행 링크
+
+> 롤백 시나리오(2·3·4·6) 실행은 Actions 에서 **빨간 X(failure)** 로 보인다. 자동 롤백이 정상 동작했다는 뜻이다 — 롤백 step 이 원복 후 job 을 실패로 끝내 "승격되지 않았음"을 표시한다.
 
 - Blue-Green 승격: [39727371342](https://github.com/seungji2001/progressive-delivery-actions/actions/runs/39727371342)
 - Blue-Green 롤백: [39728202034](https://github.com/seungji2001/progressive-delivery-actions/actions/runs/39728202034)
@@ -114,4 +117,4 @@
 - 카나리 p95 롤백: [39729490949](https://github.com/seungji2001/progressive-delivery-actions/actions/runs/39729490949)
 - 카나리 승격: [39730128028](https://github.com/seungji2001/progressive-delivery-actions/actions/runs/39730128028)
 
-> 시연 중 `production`/`infra` 승인은 API 로 자동 승인했다(코멘트 `approved by automation (demo)`). 녹화용 시연에서는 Actions 화면에서 직접 승인한다.
+> 시연 중 `production`/`infra` 승인은 API 로 자동 승인했다(코멘트 `approved by automation (demo)`). 승인자도 본인 1인이다. 6번 녹화 실행은 10% 단계에서 롤백돼 승인 단계까지 가지 않았다.

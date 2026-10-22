@@ -63,7 +63,7 @@ aws ecs describe-services --cluster pda-cluster --services pda-blue pda-green \
 **신호** — `destroy.yml` 실패, Summary 에 남은 runtime 리소스 목록.
 
 **조치 순서** (실제로 겪은 상황 → [troubleshooting #5](troubleshooting.md#5-destroy-워크플로우가-권한-부족으로-실패했다))
-1. 과금을 먼저 멈춘다 — 로컬 관리자 자격증명으로:
+1. 과금을 먼저 멈춘다 — 로컬 관리자 자격증명(시연 당시 root 세션 — 권장하지 않음, IAM Identity Center 권장)으로:
    ```bash
    cd infra/terraform/runtime
    terraform init -backend-config=backend.hcl

@@ -127,5 +127,5 @@ tests/test-canary-run.sh          # 가짜 aws CLI 로 단계 진행·롤백 판
 5. `canary.yml` `image_tag=v2.1.1` (stable = v2.0.1) → 10 → 50 → 승인 → **PROMOTED**
 6. `canary.yml` `fault_rate=0.2` → 10% 단계에서 **ROLLED_BACK(5xx)**
 7. `canary.yml` `fault_delay_ms=800` → **ROLLED_BACK(p95)**
-8. 실행 중 Cancel → 다음 실행이 상태 불일치로 거부 → `canary.yml mode=recover` → **RECOVERED**
+8. (미실행 — AWS 미검증) 실행 중 Cancel → 다음 실행이 상태 불일치로 거부 → `canary.yml mode=recover` → **RECOVERED**
 9. `destroy.yml` `confirm=destroy-runtime`
