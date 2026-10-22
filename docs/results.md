@@ -102,6 +102,8 @@
 | runtime destroy (35 리소스) | 193s |
 | CI 이미지 빌드 + Trivy + ECR push (arm64 네이티브 러너) | 약 2~3분 |
 
+시연 종료 후 bootstrap(S3 state, ECR, IAM Role, OIDC provider, 예산)까지 전부 삭제했다(2026-10-22). 다시 실행하려면 [infra/terraform/README.md](../infra/terraform/README.md) 의 적용 순서대로 bootstrap 부터 만든다.
+
 비용: runtime 을 약 50분 운영 — ALB + Fargate ARM64 1~2 태스크 + public IPv4 기준 시간당 약 $0.08~0.1. 시연 직후 destroy 했다.
 
 ## 실행 링크
