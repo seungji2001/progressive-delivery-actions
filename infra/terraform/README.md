@@ -14,9 +14,9 @@ infra/terraform/
 └── runtime/     시연 후 destroy
     ├── network.tf      VPC, public subnet ×2, IGW, SG (NAT 없음)
     ├── alb.tf          ALB, TG blue/green, 가중치 리스너, X-Target-Color 규칙
-    ├── ecs.tf          클러스터, 태스크 정의(ARM64), 서비스 pda-blue / pda-green
+    ├── ecs.tf          클러스터, 태스크 정의(ARM64), 서비스 pda-blue / pda-green, 로그 그룹(3일)
     ├── state.tf        SSM /pda/stable-color (커밋 포인터)
-    └── monitoring.tf   색별 5xx·p95 알람, 대시보드, 로그 그룹
+    └── monitoring.tf   색별 5xx·p95 알람, ELB 5xx 알람, 대시보드
 ```
 
 **왜 두 스택인가:** OIDC Role 과 ECR 을 runtime 과 함께 지우면 `destroy.yml` 이 다음 번에 자기 자신을 실행할 권한을 잃고, 롤백 대상 이미지도 사라진다.
@@ -43,7 +43,8 @@ terraform init -migrate-state \
 # 3) terraform output 값을 GitHub Variables 에 등록
 #    AWS_REGION, AWS_ROLE_ARN_CI, AWS_ROLE_ARN_DEPLOY, AWS_ROLE_ARN_INFRA, ECR_REPOSITORY, TF_STATE_BUCKET
 
-# 4) CI 로 v1.0.0, v2.0.0 이미지를 ECR 에 push (git push origin v1.0.0 v2.0.0)
+# 4) CI 로 릴리즈 이미지를 ECR 에 push: gh workflow run ci.yml -f ref=v1.0.1 (v2.0.1, v2.1.1 동일)
+#    v1.0.0/v2.0.0/v2.1.0 은 Trivy CRITICAL 로 차단됨 → 패치 릴리즈 사용 (docs/troubleshooting.md #1)
 
 # 5) runtime
 cd ../runtime
@@ -103,7 +104,8 @@ NAT Gateway 를 쓰지 않는 것이 핵심이다. 아래 단가는 서울 리�
 | `pda-gha-infra` | `environment:infra` | runtime 스택 리소스 + state `runtime/*` 키. 범위가 넓은 대신 environment 승인으로 보완 |
 
 - `pull_request` 이벤트에는 어떤 Role 도 허용하지 않는다(포크 PR 이 AWS 에 접근하지 못함).
-- job 에 `environment:` 가 있으면 OIDC 토큰의 sub 가 `repo:<owner>/<repo>:environment:<name>` 형식이 된다.
+- job 에 `environment:` 가 있으면 OIDC 토큰의 sub 가 `<prefix>:environment:<name>` 형식이 된다.
+- `<prefix>` 는 레포 설정에 따라 이름 기반 `repo:<owner>/<repo>` 또는 **immutable** `repo:<owner>@<owner_id>/<repo>@<repo_id>` 다. 이 레포는 immutable 형식이다 — `gh api repos/<owner>/<repo>/actions/oidc/customization/sub` 의 `sub_claim_prefix` 를 `bootstrap.tfvars` 의 `github_oidc_sub_prefix` 에 넣는다.
 
 ## 종료 시간 정합성 (다운타임 0)
 
