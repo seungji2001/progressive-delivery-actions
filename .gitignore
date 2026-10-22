@@ -30,3 +30,10 @@ build/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+
+# Local demo state
+infra/local/.env
+infra/local/.logs/
+infra/local/nginx/upstreams/*.conf
+infra/local/nginx/upstreams/*.tmp
+infra/local/nginx/upstreams/*.bak

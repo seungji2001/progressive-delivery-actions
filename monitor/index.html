@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Traffic Monitor</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>트래픽 모니터</h1>
+      <p class="sub">응답 버전(X-App-Version) 비율과 5xx 비율 · 최근 120초</p>
+    </div>
+    <div class="controls">
+      <label>동시성 <input id="concurrency" type="number" min="1" max="32" value="4"></label>
+      <label>간격(ms) <input id="interval" type="number" min="0" max="5000" value="100"></label>
+      <button id="toggle" type="button">시작</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="stats" id="stats"></section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>버전별 응답 비율</h2>
+        <div class="legend" id="legend"></div>
+      </div>
+      <canvas id="chart" height="280"></canvas>
+    </section>
+
+    <section class="panel">
+      <h2>최근 응답</h2>
+      <table>
+        <thead><tr><th>시각</th><th>상태</th><th>버전</th><th>지연</th></tr></thead>
+        <tbody id="log"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+# 로컬에서 ALB weighted target group 을 흉내 내는 구성.
+#   nginx(:8000)      ↔ ALB(:80)
+#   blue / green      ↔ ECS 서비스 pda-blue / pda-green
+# 이미지 태그와 장애 주입 값은 같은 디렉토리의 .env(스크립트가 관리, gitignore)에서 읽는다.
+name: pda-local
+
+x-app: &app
+  mem_limit: 1g            # Fargate 1GB 태스크 가정
+  stop_grace_period: 30s   # ECS stopTimeout 과 동일. 앱 graceful shutdown(20s)보다 길어야 한다
+  restart: "no"
+
+services:
+  blue:
+    <<: *app
+    image: coupon-api:${BLUE_TAG:-v1.0.0}
+    environment:
+      FAULT_RATE: ${BLUE_FAULT_RATE:-0}
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  green:
+    <<: *app
+    image: coupon-api:${GREEN_TAG:-v2.0.0}
+    environment:
+      FAULT_RATE: ${GREEN_FAULT_RATE:-0}
+    ports:
+      - "127.0.0.1:8082:8080"
+
+  nginx:
+    image: nginx:1.28-alpine
+    ports:
+      - "8000:80"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # 단일 파일이 아닌 디렉토리를 마운트: mv 로 원자적 교체 시 inode 가 바뀌어도 컨테이너에 반영된다
+      - ./nginx/upstreams:/etc/nginx/upstreams:ro
+      - ../../monitor:/usr/share/nginx/monitor:ro
+      - ./.logs:/var/log/pda

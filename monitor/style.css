@@ -1,0 +1,79 @@
+:root {
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --text: #1c1c1a;
+  --muted: #6b6b66;
+  --border: #e4e4df;
+  --error: #d64545;
+  --grid: #ececE7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141413;
+    --panel: #1d1d1b;
+    --text: #ecece8;
+    --muted: #9a9a93;
+    --border: #2e2e2b;
+    --error: #f07070;
+    --grid: #2a2a27;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", sans-serif;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 24px 16px 8px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+h1 { margin: 0; font-size: 22px; }
+h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.sub { margin: 4px 0 0; color: var(--muted); }
+
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.controls label { color: var(--muted); display: flex; gap: 6px; align-items: center; }
+.controls input {
+  width: 72px; padding: 6px 8px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+
+button {
+  padding: 8px 18px; border-radius: 6px; border: 0; cursor: pointer;
+  background: var(--text); color: var(--bg); font-weight: 600;
+}
+button.running { background: var(--error); color: #fff; }
+
+main { max-width: 1080px; margin: 0 auto; padding: 8px 16px 32px; display: grid; gap: 16px; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+.stat .label { color: var(--muted); font-size: 12px; }
+.stat .value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .value.bad { color: var(--error); }
+
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.panel-head { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; margin-bottom: 12px; }
+canvas { width: 100%; display: block; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+table { width: 100%; border-collapse: collapse; margin-top: 8px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td.err { color: var(--error); font-weight: 600; }
