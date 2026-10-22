@@ -1,0 +1,8 @@
+# cp bootstrap.tfvars.example bootstrap.tfvars  (bootstrap.tfvars 는 gitignore)
+aws_region           = "ap-northeast-2"
+github_owner         = "<your-github-username>"
+github_repo          = "progressive-delivery-actions"
+state_bucket_name    = "pda-tfstate-<unique-suffix>"
+create_oidc_provider = true
+monthly_budget_usd   = 10
+budget_alert_email   = "<you@example.com>"

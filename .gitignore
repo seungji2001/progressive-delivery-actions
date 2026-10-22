@@ -37,3 +37,9 @@ infra/local/.logs/
 infra/local/nginx/upstreams/*.conf
 infra/local/nginx/upstreams/*.tmp
 infra/local/nginx/upstreams/*.bak
+
+# Terraform local files
+*.tfplan
+tfplan
+backend.hcl
+.terraform.lock.hcl.bak

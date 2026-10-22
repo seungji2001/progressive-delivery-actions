@@ -1,0 +1,7 @@
+# cp backend.hcl.example backend.hcl  (backend.hcl 는 gitignore)
+# terraform init -backend-config=backend.hcl
+bucket       = "pda-tfstate-<unique-suffix>"
+key          = "runtime/terraform.tfstate"
+region       = "ap-northeast-2"
+use_lockfile = true # S3 네이티브 잠금 (DynamoDB 불필요)
+encrypt      = true
