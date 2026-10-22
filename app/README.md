@@ -11,6 +11,7 @@ Blue-Green / 카나리 배포 시연용 쿠폰 발급 API. 기능은 최소로 �
 | --- | --- | --- |
 | `v1.0.0` | 정액 할인 (`FixedAmountDiscountPolicy`, 기본 3,000원) | `COUPON_FIXED_AMOUNT` |
 | `v2.0.0` | 정률 할인 (`PercentageDiscountPolicy`, 기본 10%, 최대 5,000원) | 정액 구현은 삭제됨 |
+| `v2.1.0` | v2.0.0 과 동일 | `FAULT_DELAY_MS` 지연 주입 추가 (p95 게이트 시연용) |
 
 - 릴리즈 단위 = git 태그 = 이미지 태그 = `APP_VERSION`. 정책을 빌드 인자나 기능 플래그로 고르지 않는다. 롤백은 코드가 아니라 **이전 이미지**로 한다.
 - **API 스키마는 버전 간에 동일하다**(필드명·타입 같고 값만 다름). 카나리 중에는 두 버전이 동시에 응답하므로 스키마 호환이 배포 안전성의 전제다.
@@ -42,6 +43,7 @@ curl -X POST localhost:8080/coupons/issue \
 | `APP_VERSION` | build-info 버전 | 응답·헤더·로그에 노출할 버전. CI 가 `--build-arg` 로 주입 |
 | `GIT_SHA` | `unknown` | 빌드 커밋 |
 | `FAULT_RATE` | `0.0` | `/coupons/**` 에 500 을 낼 확률 (0.0~1.0). 범위 밖이면 기동 실패 |
+| `FAULT_DELAY_MS` | `0` | `/coupons/**` 응답 지연(0~10000ms, v2.1.0 부터). 에러 주입과 독립. ALB idle timeout(60s)보다 훨씬 작게 제한해 연결 끊김(ELB 5xx)이 아니라 `TargetResponseTime` p95 로 관측되게 한다 |
 | `COUPON_PERCENT` | `10` | 정률 할인 비율(1~100). v2 부터 |
 | `COUPON_MAX_DISCOUNT_AMOUNT` | `5000` | 최대 할인 금액(원). v2 부터 |
 | `COUPON_MIN_ORDER_AMOUNT` | `10000` | 최소 주문 금액(원) |
@@ -68,7 +70,7 @@ docker run --rm -p 8080:8080 -e FAULT_RATE=0.5 coupon-api:v1
 | 항목 | 이유 |
 | --- | --- |
 | 장애 주입은 실제 HTTP 500 | 카나리 지표 게이트가 ALB `HTTPCode_Target_5XX_Count` 로 판정하기 때문 |
-| `/health/**`, `/version` 은 장애 주입 제외 | 헬스체크가 실패하면 ECS 가 태스크를 교체해 "지표 게이트에 의한 롤백" 시연이 흐려짐 |
+| `/health/**`, `/version` 은 장애(에러·지연) 주입 제외 | 헬스체크가 실패하면 ECS 가 태스크를 교체해 "지표 게이트에 의한 롤백" 시연이 흐려짐 |
 | graceful shutdown 20s | ALB `deregistration_delay` / ECS `stopTimeout`(30s 이상)과 맞춰 다운타임 0 |
 | `DiscountPolicy` 인터페이스 | v2(정률 할인) 릴리즈가 구현체 교체만으로 끝나도록 |
 | 버전은 빌드 시점 주입 | 같은 이미지 = 같은 버전. 기능 플래그가 아닌 이미지 단위 릴리즈 |

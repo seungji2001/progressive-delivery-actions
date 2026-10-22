@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 /**
- * /coupons/** 요청에만 장애를 주입한다. 헬스체크·버전 엔드포인트에 적용하면
+ * /coupons/** 요청에만 장애(지연·에러)를 주입한다. 헬스체크·버전 엔드포인트에 적용하면
  * ECS 가 태스크를 교체해 버려 "지표 게이트에 의한 롤백" 시연이 흐려진다.
  */
 @Component
@@ -25,6 +25,10 @@ public class FaultInjectionInterceptor implements HandlerInterceptor {
 
 	@Override
 	public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
+		long delayed = this.faultInjector.delay();
+		if (delayed > 0) {
+			log.atDebug().addKeyValue("faultDelayMs", delayed).log("Fault delay injected");
+		}
 		if (this.faultInjector.shouldFail()) {
 			log.atWarn()
 				.addKeyValue("faultInjected", true)

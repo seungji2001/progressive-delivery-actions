@@ -32,6 +32,20 @@ class FaultPropertiesValidationTest {
 		this.runner.withPropertyValues("fault.rate=-0.1").run((context) -> assertThat(context).hasFailed());
 	}
 
+	@Test
+	void 지연이_10000ms_를_넘으면_기동_실패() {
+		this.runner.withPropertyValues("fault.delay-ms=10001").run((context) -> assertThat(context).hasFailed());
+	}
+
+	@Test
+	void 지연_범위_안이면_기동() {
+		this.runner.withPropertyValues("fault.delay-ms=800")
+			.run((context) -> assertThat(context).hasNotFailed()
+				.getBean(FaultProperties.class)
+				.extracting(FaultProperties::delayMs)
+				.isEqualTo(800L));
+	}
+
 	@Configuration(proxyBeanMethods = false)
 	@EnableConfigurationProperties(FaultProperties.class)
 	static class FaultConfig {

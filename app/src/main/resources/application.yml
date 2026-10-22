@@ -25,6 +25,8 @@ coupon:
 fault:
   # 0.0 ~ 1.0, /coupons/** 에만 적용
   rate: ${FAULT_RATE:0.0}
+  # 0 ~ 10000 ms, /coupons/** 에만 적용 (p95 게이트 시연용)
+  delay-ms: ${FAULT_DELAY_MS:0}
 
 management:
   endpoints:
