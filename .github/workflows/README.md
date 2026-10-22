@@ -119,11 +119,12 @@ tests/test-canary-run.sh          # 가짜 aws CLI 로 단계 진행·롤백 판
 
 ## AWS 시연 절차
 
-1. `git push origin main v1.0.0 v2.0.0 v2.1.0` → `ci.yml` 이 태그 이미지를 ECR 에 push
-2. `infra/terraform/runtime` apply (blue = v1.0.0)
-3. `blue-green.yml` `image_tag=v2.0.0` → 승인 → **PROMOTED** 확인
-4. `blue-green.yml` `image_tag=v1.0.0`, `fault_rate=0.5` → 승인 → 관찰 중 **ROLLED_BACK** 확인
-5. `canary.yml` `image_tag=v2.1.0` (stable = v2.0.0) → 10 → 50 → 승인 → **PROMOTED**
+1. 태그 이미지를 ECR 에 push: `gh workflow run ci.yml -f ref=v1.0.1` (v2.0.1, v2.1.1 동일)
+   - `v1.0.0`/`v2.0.0`/`v2.1.0` 은 Tomcat CRITICAL CVE 로 Trivy 게이트에서 차단됨 → 패치 릴리즈 사용 (`docs/troubleshooting.md`)
+2. `infra/terraform/runtime` apply (blue = v1.0.1)
+3. `blue-green.yml` `image_tag=v2.0.1` → 승인 → **PROMOTED** 확인
+4. `blue-green.yml` `image_tag=v1.0.1`, `fault_rate=0.5` → 승인 → 관찰 중 **ROLLED_BACK** 확인
+5. `canary.yml` `image_tag=v2.1.1` (stable = v2.0.1) → 10 → 50 → 승인 → **PROMOTED**
 6. `canary.yml` `fault_rate=0.2` → 10% 단계에서 **ROLLED_BACK(5xx)**
 7. `canary.yml` `fault_delay_ms=800` → **ROLLED_BACK(p95)**
 8. 실행 중 Cancel → 다음 실행이 상태 불일치로 거부 → `canary.yml mode=recover` → **RECOVERED**

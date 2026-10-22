@@ -220,8 +220,9 @@ data "aws_iam_policy_document" "infra" {
   }
 
   statement {
-    sid       = "EcrRead"
-    actions   = ["ecr:DescribeRepositories", "ecr:DescribeImages"]
+    sid = "EcrRead"
+    # runtime 의 data "aws_ecr_repository" 는 태그도 읽는다 (ListTagsForResource) — 실제 destroy 실행에서 발견
+    actions   = ["ecr:DescribeRepositories", "ecr:DescribeImages", "ecr:ListTagsForResource"]
     resources = [aws_ecr_repository.app.arn]
   }
 

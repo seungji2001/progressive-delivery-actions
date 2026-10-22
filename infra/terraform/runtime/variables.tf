@@ -23,7 +23,7 @@ variable "allowed_ingress_cidrs" {
 variable "initial_image_tag" {
   description = "최초 apply 시 blue 서비스가 띄울 이미지 태그. ECR 에 미리 push 되어 있어야 한다."
   type        = string
-  default     = "v1.0.0"
+  default     = "v1.0.1"
 }
 
 variable "task_cpu" {
