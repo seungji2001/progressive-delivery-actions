@@ -47,7 +47,7 @@
           method: 'POST',
           cache: 'no-store',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: 'monitor', orderAmount: 25000 }),
+          body: JSON.stringify({ userId: `monitor-${Math.floor(Math.random() * 100000)}`, orderAmount: 25000 }),
         });
         record(res.status, res.headers.get('X-App-Version'), performance.now() - started);
       } catch {

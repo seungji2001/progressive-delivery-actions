@@ -46,12 +46,12 @@ stop=0
 worker() {
 	local curl_args=(-s -o /dev/null --max-time 10 -X POST
 		-H 'Content-Type: application/json'
-		-d '{"userId":"load","orderAmount":25000}'
 		-w '%{http_code},%header{x-app-version},%{time_total}\n')
 	[[ -n "${header}" ]] && curl_args+=(-H "${header}")
 	trap 'stop=1' TERM INT
 	while ((SECONDS < end && stop == 0)); do
-		curl "${curl_args[@]}" "${target}/coupons/issue" || true
+		# 사용자마다 다른 userId: 특정 사용자군에서만 터지는 결함도 드러나게 한다
+		curl "${curl_args[@]}" -d "{\"userId\":\"load-${RANDOM}\",\"orderAmount\":25000}" "${target}/coupons/issue" || true
 		[[ "${interval}" == "0" ]] || sleep "${interval}"
 	done | perl -MTime::HiRes=time -ne '
 		BEGIN { $| = 1 }
