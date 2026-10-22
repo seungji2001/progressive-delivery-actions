@@ -1,90 +1,144 @@
 # progressive-delivery-actions
 
-> **AWS 실측 결과**: [docs/results.md](docs/results.md) · **실제로 만난 문제**: [docs/troubleshooting.md](docs/troubleshooting.md) · 로컬 검증: [infra/local](infra/local/README.md)
+**GitHub Actions 로 ALB 가중치를 직접 제어하는 Blue-Green · 카나리 배포 파이프라인.**
+지표가 나빠지면 사람 개입 없이 이전 버전으로 되돌린다. 실제 AWS(ECS Fargate + ALB)에서 정상 배포 2회, 장애 주입 롤백 3회를 실행해 검증했다.
 
-> GitHub Actions 하나로 **Blue-Green 배포**와 **카나리 배포(자동 롤백 포함)** 를 오케스트레이션한 클라우드 엔지니어링 포트폴리오
+| 무중단 배포 | 자동 롤백 | 롤백 판정 | 장기 자격증명 |
+| --- | --- | --- | --- |
+| 배포 중 요청 **6,511건 실패 0** | 장애 주입 **3/3 회 롤백** | 전환 후 **15초** 감지 · **8초** 원복 | **0개** (GitHub OIDC) |
 
-## 1. 왜 이 주제인가
+`Spring Boot 4.1` `Java 21` `Docker (arm64)` `AWS ECS Fargate` `ALB` `CloudWatch` `Terraform` `GitHub Actions` `OIDC` `Trivy`
 
-배포 전략 포트폴리오에서 평가받는 것은 "서비스 기능"이 아니라 **배포 파이프라인이 실패를 어떻게 다루는가**다.
-그래서 서비스는 작고 단순하게 두고, 아래 세 가지를 눈으로 보이게 만드는 데 집중한다.
+---
 
-1. 트래픽이 v1 → v2 로 **단계적으로 넘어가는 과정** (0 → 10 → 50 → 100%)
-2. 지표가 나빠졌을 때 **사람 개입 없이 자동 롤백**되는 과정
-3. Blue-Green 에서 **즉시 전환 / 즉시 복귀** 가 가능한 구조
+## 1. 문제
 
-## 2. 데모 서비스: 쿠폰 발급 API
+배포는 장애가 가장 자주 시작되는 지점이다. 흔한 배포 파이프라인은 "새 버전을 올리는 것"까지만 자동화하고, **새 버전이 나쁠 때** 무엇을 할지는 사람에게 맡긴다.
 
-| 항목 | 내용 |
-| --- | --- |
-| 도메인 | 커머스 쿠폰 발급 (`POST /coupons/issue`, `GET /coupons/{id}`) |
-| 선택 이유 | 커머스 실무 경험과 연결되고, "할인 로직 변경"이 배포 리스크의 현실적인 예시가 됨 |
-| 버전 시나리오 | **v1** 정액 할인 → **v2** 정률 할인(정상 릴리즈) → **v3** 의도적 버그(5xx 증가, 롤백 시연용) |
-| 관측 포인트 | `GET /version`, `GET /health`, 응답 헤더 `X-App-Version`, 에러율·p95 지연 |
-| 장애 주입 | 환경변수 `FAULT_RATE` 로 에러율 조절 → 카나리 자동 롤백 재현 |
+이 프로젝트는 반대로 **실패 처리를 파이프라인의 주 기능**으로 설계했다.
 
-부가로 **트래픽 모니터 페이지**(정적 HTML)를 두어 요청을 계속 보내며 응답 버전 비율을 실시간 차트로 보여준다. (README GIF / 면접 시연용)
+1. 새 버전은 일부 트래픽(10% → 50%)에만 먼저 노출한다.
+2. 단계마다 서버 지표로 판정하고, 기준을 넘으면 **즉시 이전 버전으로 되돌린다**.
+3. 판정할 근거(표본)가 부족하면 승격하지 않는다.
+4. 파이프라인이 중간에 끊겨도 트래픽 상태를 감지하고 복구할 수 있어야 한다.
 
-## 3. 아키텍처
+서비스는 일부러 작게 만들었다 — 쿠폰 발급 API 하나. 버전마다 할인 정책만 다르다(v1 정액 → v2 정률). "할인 로직 변경"은 커머스에서 실제로 위험한 배포의 전형이다.
 
-**확정 스택:** AWS · Spring Boot 4.1 (Java 21, Gradle) · Terraform · GitHub Actions · 별도 레포
+## 2. 설계
 
-```
-GitHub (push / tag)
-   │
-   ▼
-GitHub Actions ──(OIDC, 장기 키 없음)──▶ AWS
-   │  build → test → Trivy 스캔 → ECR push
-   │
-   ├─ blue-green.yml
-   │     green 서비스 기동 → 스모크 테스트 → ALB 리스너 100% 전환
-   │     → 관찰 시간 → blue 축소 (실패 시 리스너 원복)
-   │
-   └─ canary.yml
-         ALB 가중치 10% → 지표 게이트 → 50% → 지표 게이트 → 100%
-         지표 게이트 = CloudWatch 5xx 비율 / p95 지연 임계값
-         임계 초과 시 가중치 0% 로 자동 롤백 + Job Summary 리포트
-
-AWS
-  ALB ─┬─ Target Group: blue  ── ECS Fargate Service (v현재)
-       └─ Target Group: green ── ECS Fargate Service (v신규)
-  ECR · CloudWatch(Alarms/Logs) · Terraform 으로 전부 IaC
+```mermaid
+flowchart LR
+    subgraph GH[GitHub]
+        T[tag v*] --> CI[ci.yml<br/>test · arm64 build<br/>Trivy · ECR push]
+        D[workflow_dispatch] --> BG[blue-green.yml]
+        D --> CA[canary.yml]
+    end
+    CI -- OIDC --> ECR[(ECR<br/>IMMUTABLE)]
+    BG -- OIDC --> ALB
+    CA -- OIDC --> ALB
+    subgraph AWS[AWS ap-northeast-2]
+        ALB[ALB 리스너<br/>weighted forward] -->|weight| TGB[TG blue] --> SB[ECS pda-blue]
+        ALB -->|weight| TGG[TG green] --> SG[ECS pda-green]
+        CW[(CloudWatch<br/>5xx · p95)]
+        SSM[(SSM<br/>stable-color)]
+    end
+    CA -. 판정 .-> CW
+    CA -. 커밋 포인터 .-> SSM
 ```
 
-### 설계 결정
+### 핵심 결정
 
-- **GitHub Actions 가 트래픽 전환을 직접 수행**한다 (ALB weighted target group 을 `aws elbv2 modify-listener` 로 제어).
-  CodeDeploy·Argo Rollouts 에 맡기지 않는 이유: "GitHub Actions를 활용한 배포 전략"이라는 주제에서 전환 로직이 파이프라인 코드에 그대로 드러나야 하기 때문.
-- **ECS Fargate + ALB**: EKS 대비 비용·운영 부담이 낮고 블루/그린 타깃 그룹 구성이 단순함.
-- **Environments + 승인**: `production` 환경에 required reviewer 를 걸어 100% 전환 직전 수동 승인 단계 시연.
-- **비용 통제**: `terraform destroy` 워크플로우를 별도로 두어 시연 후 즉시 정리.
-
-## 4. 디렉토리 계획
-
-```
-progressive-delivery-actions/
-├── app/                     # 쿠폰 발급 API - Spring Boot 4.1 / Java 21 / Gradle (+ Dockerfile, 테스트)
-├── monitor/                 # 버전 비율 실시간 모니터 페이지
-├── infra/terraform/         # VPC, ALB, ECS, ECR, CloudWatch, OIDC Role
-├── .github/workflows/       # ci.yml, blue-green.yml, canary.yml, destroy.yml
-├── scripts/                 # 가중치 전환 / 지표 게이트 / 부하 생성 스크립트
-└── docs/                    # 아키텍처 다이어그램, 시연 GIF, 회고
-```
-
-## 5. 진행 단계
-
-| 단계 | 내용 | 산출물 |
+| 결정 | 이유 | 대안을 버린 이유 |
 | --- | --- | --- |
-| 1 | 쿠폰 API v1 (Spring Boot) + Docker + 단위 테스트 | `app/` ✅ |
-| 2 | 로컬 docker compose + nginx 가중치로 Blue-Green/카나리 개념 검증 | `infra/local/` ✅ |
-| 3 | Terraform 으로 AWS 인프라 구성 + GitHub OIDC | `infra/terraform/` ✅ AWS 적용 |
-| 4 | CI + Blue-Green 워크플로우 | `.github/workflows/` ✅ AWS 실측 |
-| 5 | 카나리 워크플로우 + 지표 게이트 + 자동 롤백 | `canary.yml` ✅ AWS 실측 |
-| 6 | v3 장애 주입 → 자동 롤백 시연 녹화 | `docs/` GIF |
-| 7 | 포트폴리오 문서화 (문제 → 설계 → 결과 → 회고) | README |
+| **GitHub Actions 가 `aws elbv2 modify-listener` 로 가중치를 직접 바꾼다** | 전환·판정·롤백 로직이 파이프라인 코드에 그대로 드러나고, 리뷰·테스트할 수 있다 | CodeDeploy · Argo Rollouts · ECS 내장 blue/green 은 로직을 숨긴다 |
+| **두 층 게이트**: CloudWatch(권위) + 러너 부하 기반 fast guard(조기 감지) | ALB 지표는 60초 해상도 + 1~2분 지연. 그 사이 장애를 클라이언트 측에서 먼저 잡는다 | CloudWatch 알람 액션만으로는 반응이 늦고 판정 근거가 Summary 에 남지 않는다 |
+| **표본 부족도 롤백** | 증거 없이 승격하지 않는다 | "에러가 없으니 통과"는 트래픽이 없을 때도 통과한다 |
+| **승인 후 재판정** | 승인 대기 동안 아무도 지표를 보지 않는다 | 승인 즉시 100% 는 대기 중 악화를 놓친다 |
+| **리스너 가중치 = 진실 원천, SSM = 커밋 포인터** ([ADR](docs/adr/0001-traffic-state.md)) | 50/50 같은 중간 상태에서도 stable 을 판별하고, 중단된 배포를 감지·복구(`mode=recover`) | 가중치만으로는 판별 불가, S3/DynamoDB 는 이 규모에 과함 |
+| **릴리즈 = git 태그 = 이미지 태그** (ECR IMMUTABLE) | 롤백 대상 이미지가 바뀌지 않는다 | 기능 플래그는 두 코드 경로가 모든 이미지에 남는다 |
+| **장애 주입은 실제 HTTP 500 / 지연, 헬스체크는 제외** | ALB 지표가 그대로 잡고, ECS 가 태스크를 교체해 시연이 흐려지지 않는다 | |
+| **OIDC 만 사용, Role 3개 분리**(ci / deploy / infra) | 장기 키 0. PR 에는 어떤 Role 도 허용하지 않는다 | |
+| **NAT Gateway 없음** — public subnet + 태스크 SG 는 ALB 에서만 | 시연 환경 고정비 최소화 (시간당 약 $0.1) | NAT·VPC 엔드포인트는 시간당 고정비 |
+| **종료 시간 정합성**: weight 0 → drain 30s → graceful 20s → stopTimeout 30s | 다운타임 0 | |
 
-## 6. 포트폴리오에 남길 수치
+### 배포 흐름 (canary.yml)
 
-- 배포 1회 소요 시간, 롤백 소요 시간 (목표: 자동 롤백 1분 이내)
-- 카나리 단계별 에러율 / p95 지연 그래프
-- 다운타임 0 증명 (배포 중 부하 테스트 실패 요청 수)
+```mermaid
+flowchart LR
+    P[후보 배포<br/>스모크] --> S10[10%] --> G1{게이트}
+    G1 -- 실패 --> RB[stable 100% 원복<br/>후보 축소]
+    G1 -- 통과 --> S50[50%] --> G2{게이트}
+    G2 -- 실패 --> RB
+    G2 -- 통과 --> A[[production 승인]] --> RG{50% 재판정}
+    RG -- 실패 --> RB
+    RG -- 통과 --> S100[100%] --> G3{게이트}
+    G3 -- 실패 --> RB
+    G3 -- 통과 --> C[SSM 커밋<br/>이전 색 축소]
+```
+
+## 3. 결과 — 실제 AWS 실측
+
+전체 수치와 타임라인: **[docs/results.md](docs/results.md)**
+
+| 시나리오 | 결과 | 핵심 수치 |
+| --- | --- | --- |
+| Blue-Green `v1 → v2` | **PROMOTED** | 요청 2,056 / 실패 0 · 서버 p95 5ms · 이전 색 drain 17s |
+| Blue-Green, 후보 에러 50% | **ROLLED_BACK** | 전환 → 감지 15s → 원복 8s · 사용자 영향 18.9s |
+| 카나리, 후보 에러 20% | **ROLLED_BACK** | 10% 단계에서 차단 · 전체 5xx 1.89% |
+| 카나리, 후보 지연 800ms | **ROLLED_BACK** | CloudWatch p95 805ms > 500ms · 10% 단계에서 차단 |
+| 카나리 `v2.0 → v2.1` | **PROMOTED** | 10 → 50 → 승인 → 재판정 → 100 · 요청 4,455 / 실패 0 · 16분 |
+
+로컬(nginx 로 ALB 를 흉내 낸 환경)에서도 같은 시나리오를 먼저 검증했다 → [infra/local](infra/local/README.md). 롤백 판정 → 원복 618~767ms.
+
+## 4. 실제로 부딪힌 문제
+
+AWS 에 처음 적용하면서 다섯 번 막혔다. 전부 [docs/troubleshooting.md](docs/troubleshooting.md) 에 원인과 판단을 남겼다. 그중 셋:
+
+- **Trivy 게이트가 첫 릴리즈를 막았다.** Spring Boot 가 끌어온 내장 Tomcat 에 CRITICAL CVE 3건. 게이트를 완화하지 않고, 공개된 태그도 다시 쓰지 않았다 → 버전 고정 후 **패치 릴리즈**(`v1.0.1` 등)를 냈다.
+- **OIDC AssumeRole 거부.** 새 레포는 GitHub 의 *immutable subject*(owner/repo 숫자 ID 포함)를 쓴다. 신뢰 정책을 그 형식으로 바꿨다 — 레포 이름 재사용 공격에도 안전해졌다.
+- **destroy 워크플로우 권한 부족.** Terraform 이 refresh 중 호출하는 읽기 API(`ecr:ListTagsForResource`)가 빠져 있었다. 과금이 이어지므로 먼저 로컬에서 삭제하고, 권한을 보완한 뒤 워크플로우를 다시 검증했다.
+
+## 5. 회고
+
+**잘한 것**
+- **로컬에서 먼저 검증했다.** nginx 가중치·JSON 로그로 ALB·CloudWatch 를 1:1 로 흉내 낸 환경에서 판정 로직과 종료 순서를 확인했다. AWS 에서는 인프라·권한 문제만 남았다.
+- **판정 로직을 테스트 가능하게 만들었다.** 게이트는 셸 스크립트 + 종료 코드 규약(0 통과 / 10 초과 / 11 표본 부족)으로 분리했고, CloudWatch 응답 fixture 와 가짜 aws CLI 로 CI 에서 돌린다.
+- **실패를 숨기지 않았다.** 차단·권한 오류를 우회하지 않고 기준을 지킨 채 해결했다.
+
+**실측으로 드러난 한계와 개선**
+
+| 발견 | 원인 | 조치 |
+| --- | --- | --- |
+| 카나리 10% 단계에서 fast guard 감지에 123s | 후보가 약 1 rps 만 받는데 감지 창이 30s → 최소 표본(20)을 못 채움 | 카나리용 창 120s 로 확대 (오프라인 테스트 통과, **AWS 재측정 전**) |
+| 감지 → 원복 7~8s 중 대부분이 대기 | GitHub Actions 의 step 전환 시간 | 판정 step 안에서 바로 원복하도록 합칠 수 있다 (미적용) |
+| p95 롤백까지 187s | 표본 50건을 채울 때까지 판정 보류 (의도) | 낮은 트래픽 단계의 최소 표본·부하 rps 를 함께 조정 |
+| 러너 측 지연 약 300ms | 미국 러너 → 서울 ALB 왕복 | 판정은 서버 측 CloudWatch p95 기준이라 영향 없음. 기록만 |
+
+**범위 밖으로 남긴 것** — HTTPS(도메인·ACM), 오토스케일링, 실사용 트래픽 기반 판정. 코드 결함 버전(v3) 롤백 녹화는 다음 단계다.
+
+## 6. AI 활용
+
+설계·구현은 Claude Code 와 함께 했다. 단계마다 요구사항을 **프롬프트 엔지니어 에이전트**(`.claude/agents/prompt-engineer.md`)로 Role · Context · Task · Expected Output 구조의 실행 프롬프트로 고도화한 뒤 구현했고, 그 프롬프트를 [docs/prompts/](docs/prompts/) 에 남겼다. 에이전트가 다음 단계와의 인터페이스(헬스체크 경로, 종료 코드 규약, CSV 규격)를 미리 고정하게 한 덕분에 단계 간 재작업이 적었다.
+
+## 레포 구조
+
+```
+app/                  쿠폰 API (Spring Boot 4.1, Java 21) + Dockerfile + 테스트 29개
+monitor/              응답 버전 비율 실시간 차트 (순수 HTML/JS)
+infra/local/          docker compose + nginx 로 ALB 가중치 재현
+infra/terraform/      bootstrap(상시: OIDC·ECR·state) / runtime(시연 후 삭제: VPC·ALB·ECS)
+.github/workflows/    ci · blue-green · canary · destroy
+scripts/aws/          가중치 전환 · 후보 배포 · 스모크 · 지표 게이트 · 카나리 실행기
+scripts/load/         부하 생성 · 요약 · fast guard
+tests/                게이트 fixture · 가짜 aws CLI
+docs/                 results · troubleshooting · ADR · prompts · plan
+```
+
+## 직접 실행하기
+
+| 목적 | 문서 |
+| --- | --- |
+| 로컬에서 Blue-Green / 카나리 / 롤백 재현 (AWS 불필요) | [infra/local/README.md](infra/local/README.md) |
+| AWS 인프라 구성 순서, 비용, 권한 | [infra/terraform/README.md](infra/terraform/README.md) |
+| 워크플로우 설정, 실패 시나리오별 동작, 시연 절차 | [.github/workflows/README.md](.github/workflows/README.md) |
+| 앱 엔드포인트, 환경변수, 릴리즈 | [app/README.md](app/README.md) |
