@@ -8,9 +8,9 @@ terraform {
     }
   }
 
-  # 최초 apply 는 로컬 state 로 한다 (state 버킷이 아직 없음).
-  # 이후 README 절차대로 backend "s3" 를 켜고 `terraform init -migrate-state` 로 이전한다.
-  # backend "s3" {}
+  # 최초 apply 는 이 블록을 주석 처리한 채 로컬 state 로 한다 (state 버킷이 아직 없음).
+  # 이후 `terraform init -migrate-state -backend-config=...` 로 S3 의 bootstrap/terraform.tfstate 로 이전했다.
+  backend "s3" {}
 }
 
 provider "aws" {
