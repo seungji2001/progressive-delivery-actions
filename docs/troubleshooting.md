@@ -59,3 +59,19 @@ Role 신뢰 정책은 이름 기반 `repo:seungji2001/progressive-delivery-actio
 ## 4. 러너와 로컬의 ShellCheck 버전 차이
 
 로컬(0.11)에서는 경고가 없던 `A && B || C` 패턴을 러너의 ShellCheck 가 SC2015 로 보고했다. `if` 문으로 바꿔 해결했다. 린터 버전 차이로 CI 결과가 갈릴 수 있다는 점을 기록해 둔다.
+
+## 5. destroy 워크플로우가 권한 부족으로 실패했다
+
+**상황** — 시연 후 `destroy.yml` 이 실패했다.
+
+```
+AccessDeniedException: assumed-role/pda-gha-infra/GitHubActions is not authorized to perform: ecr:ListTagsForResource
+```
+
+**원인** — runtime 스택의 `data "aws_ecr_repository"` 는 리포지토리 태그도 읽는다. 최소 권한으로 정책을 쓰면서 `DescribeRepositories` 만 넣었다.
+
+**대응**
+1. 과금이 계속되므로 먼저 로컬 관리자 자격증명으로 `terraform destroy` (35 리소스, 193s) → ALB·ECS·VPC·공인 IP 0 확인.
+2. `infra` Role 에 `ecr:ListTagsForResource` 추가 → 빈 state 로 `destroy.yml` 재실행해 초기화·refresh 단계 권한 통과 확인.
+
+**배운 점** — 최소 권한 정책은 "쓰는 API"만이 아니라 Terraform provider 가 refresh 중 호출하는 읽기 API 까지 포함해야 한다. 정리(destroy) 경로는 실제로 한 번 돌려 봐야 검증된다. 실제 리소스 삭제 권한 전체는 다음 시연의 destroy 에서 다시 확인한다.

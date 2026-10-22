@@ -1,5 +1,7 @@
 # progressive-delivery-actions
 
+> **AWS 실측 결과**: [docs/results.md](docs/results.md) · **실제로 만난 문제**: [docs/troubleshooting.md](docs/troubleshooting.md) · 로컬 검증: [infra/local](infra/local/README.md)
+
 > GitHub Actions 하나로 **Blue-Green 배포**와 **카나리 배포(자동 롤백 포함)** 를 오케스트레이션한 클라우드 엔지니어링 포트폴리오
 
 ## 1. 왜 이 주제인가
@@ -75,9 +77,9 @@ progressive-delivery-actions/
 | --- | --- | --- |
 | 1 | 쿠폰 API v1 (Spring Boot) + Docker + 단위 테스트 | `app/` ✅ |
 | 2 | 로컬 docker compose + nginx 가중치로 Blue-Green/카나리 개념 검증 | `infra/local/` ✅ |
-| 3 | Terraform 으로 AWS 인프라 구성 + GitHub OIDC | `infra/terraform/` ✅ (apply 전) |
-| 4 | CI + Blue-Green 워크플로우 | `.github/workflows/` ✅ (AWS 실행 전) |
-| 5 | 카나리 워크플로우 + 지표 게이트 + 자동 롤백 | `canary.yml` ✅ (AWS 실행 전) |
+| 3 | Terraform 으로 AWS 인프라 구성 + GitHub OIDC | `infra/terraform/` ✅ AWS 적용 |
+| 4 | CI + Blue-Green 워크플로우 | `.github/workflows/` ✅ AWS 실측 |
+| 5 | 카나리 워크플로우 + 지표 게이트 + 자동 롤백 | `canary.yml` ✅ AWS 실측 |
 | 6 | v3 장애 주입 → 자동 롤백 시연 녹화 | `docs/` GIF |
 | 7 | 포트폴리오 문서화 (문제 → 설계 → 결과 → 회고) | README |
 

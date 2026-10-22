@@ -38,6 +38,9 @@ min_observe="${GATE_WINDOW_SECONDS:-180}"
 max_wait="${GATE_MAX_WAIT_SECONDS:-420}"
 delay="${GATE_METRIC_DELAY:-60}"
 poll="${GATE_POLL:-30}"
+# fast guard 창: 10% 단계에서 후보는 전체 rps 의 10% 만 받는다 (10 rps → 약 1 rps).
+# 30s 창이면 최소 표본 20 을 채울 수 없어 감지가 늦어진다 (AWS 실측: 123s) → 기본 120s.
+fg_window="${FAST_GUARD_WINDOW:-120}"
 dir="$(dirname "$0")"
 
 [[ -f "${report}" ]] || echo '[]' >"${report}"
@@ -66,12 +69,12 @@ for pct in "${step_list[@]}"; do
 	log "step ${pct}%: weights applied, waiting ${delay}s for ALB metrics"
 
 	# 지표 지연 동안에도 fast guard 는 계속 본다
-	fg="$("${dir}/../load/fast-guard.sh" --csv "${csv}" --version "${version}" \
+	fg="$("${dir}/../load/fast-guard.sh" --csv "${csv}" --version "${version}" --window "${fg_window}" \
 		--follow --until "$((t_step + delay))" --interval 5)" || fail_with 10 "fast-guard" "${fg}" "${pct}"
 
 	while true; do
 		elapsed=$(($(date +%s) - t_step))
-		fg="$("${dir}/../load/fast-guard.sh" --csv "${csv}" --version "${version}")" ||
+		fg="$("${dir}/../load/fast-guard.sh" --csv "${csv}" --version "${version}" --window "${fg_window}")" ||
 			fail_with 10 "fast-guard" "${fg}" "${pct}"
 
 		set +e
