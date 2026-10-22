@@ -59,7 +59,8 @@ jobs:
 
   image:
     needs: test
-    if: github.event_name != 'pull_request'
+    # AWS 미설정(bootstrap 전)이면 이미지 job 을 건너뛴다
+    if: github.event_name != 'pull_request' && vars.AWS_ROLE_ARN_CI != ''
     runs-on: ubuntu-24.04-arm # 네이티브 arm64 (Fargate ARM64 와 일치, QEMU 대비 수 배 빠름)
     permissions:
       contents: read
