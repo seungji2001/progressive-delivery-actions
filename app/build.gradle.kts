@@ -5,13 +5,17 @@ plugins {
 }
 
 group = "com.portfolio"
-version = "2.0.0"
+version = "2.0.1"
 
 java {
 	toolchain {
 		languageVersion = JavaLanguageVersion.of(21)
 	}
 }
+
+// Spring Boot 4.1.1 의 내장 Tomcat 11.0.24 에 CRITICAL CVE 3건(CVE-2026-65182, -65905, -68525) → 수정 버전으로 고정.
+// CI Trivy 게이트가 릴리즈를 차단해 발견. Boot 패치 릴리즈가 11.0.25+ 를 포함하면 이 줄을 제거한다.
+extra["tomcat.version"] = "11.0.27"
 
 repositories {
 	mavenCentral()
