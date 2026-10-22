@@ -1,0 +1,263 @@
+name: blue-green
+
+# 비활성 색에 새 이미지 배포 → 스모크 → [production 승인] → 리스너 100% 전환 → 관찰 → 실패 시 즉시 원복
+# 트래픽 전환은 scripts/aws/set-weights.sh(aws elbv2 modify-listener) 한 곳에서만 일어난다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "배포할 이미지 태그 (예: v2.0.0)"
+        required: true
+      observe_seconds:
+        description: "전환 후 관찰 시간(초)"
+        default: "180"
+      fault_rate:
+        description: "후보 태스크에만 주입할 FAULT_RATE (롤백 시연용)"
+        default: "0"
+      scale_down_previous:
+        description: "성공 시 이전 색을 0 으로 축소 (false 면 즉시 복귀 가능 상태 유지)"
+        type: boolean
+        default: true
+
+permissions: {}
+
+# canary.yml / destroy.yml 과 같은 그룹: 트래픽을 바꾸는 실행은 한 번에 하나만
+concurrency:
+  group: pda-traffic
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  IMAGE_TAG: ${{ inputs.image_tag }}
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      noop: ${{ steps.current.outputs.noop }}
+      stable: ${{ steps.state.outputs.stable_color }}
+      candidate: ${{ steps.state.outputs.candidate_color }}
+      stable_image: ${{ steps.current.outputs.stable_image }}
+      alb_dns: ${{ steps.res.outputs.alb_dns }}
+      started: ${{ steps.start.outputs.started }}
+      stabilize_seconds: ${{ steps.deploy.outputs.stabilize_seconds }}
+    steps:
+      - id: start
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: res
+        run: scripts/aws/resolve-resources.sh
+
+      - name: Traffic state (refuse if inconsistent)
+        id: state
+        run: |
+          scripts/aws/traffic-state.sh
+          if grep -q '^consistent=false' "$GITHUB_OUTPUT"; then
+            echo "::error::트래픽 상태 불일치 — canary.yml mode=recover 로 복구 후 다시 실행"
+            exit 1
+          fi
+
+      - name: Current stable image
+        id: current
+        env:
+          STABLE: ${{ steps.state.outputs.stable_color }}
+        run: |
+          td="$(aws ecs describe-services --cluster pda-cluster --services "pda-${STABLE}" \
+            --query 'services[0].taskDefinition' --output text)"
+          image="$(aws ecs describe-task-definition --task-definition "${td}" \
+            --query 'taskDefinition.containerDefinitions[0].image' --output text)"
+          tag="${image##*:}"
+          echo "stable_image=${tag}" >> "$GITHUB_OUTPUT"
+          if [[ "${tag}" == "${IMAGE_TAG}" ]]; then
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+            echo "## NO_OP — \`${STABLE}\` already runs \`${IMAGE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "noop=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy candidate
+        id: deploy
+        if: steps.current.outputs.noop == 'false'
+        env:
+          CANDIDATE: ${{ steps.state.outputs.candidate_color }}
+          FAULT_RATE: ${{ inputs.fault_rate }}
+        run: scripts/aws/deploy-candidate.sh --color "${CANDIDATE}" --image-tag "${IMAGE_TAG}" --env "FAULT_RATE=${FAULT_RATE}"
+
+      - name: Smoke test (X-Target-Color)
+        if: steps.current.outputs.noop == 'false'
+        env:
+          CANDIDATE: ${{ steps.state.outputs.candidate_color }}
+          ALB: ${{ steps.res.outputs.alb_dns }}
+        run: scripts/aws/smoke-test.sh --base-url "http://${ALB}" --color "${CANDIDATE}" --expect-version "${IMAGE_TAG}"
+
+      - name: Abort — scale candidate down
+        if: failure() && steps.state.outputs.consistent == 'true'
+        env:
+          CANDIDATE: ${{ steps.state.outputs.candidate_color }}
+        run: |
+          scripts/aws/scale-service.sh --color "${CANDIDATE}" --count 0
+          echo "## ABORTED_BEFORE_SWITCH — 리스너를 건드리지 않았으므로 롤백할 트래픽 없음" >> "$GITHUB_STEP_SUMMARY"
+
+  switch:
+    name: switch
+    needs: prepare
+    if: needs.prepare.outputs.noop == 'false'
+    runs-on: ubuntu-latest
+    environment: production # ← required reviewer 승인 지점 (100% 전환 직전)
+    permissions:
+      contents: read
+      id-token: write
+      actions: read # 승인 대기 시간 계산
+    env:
+      STABLE: ${{ needs.prepare.outputs.stable }}
+      CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+      ALB: ${{ needs.prepare.outputs.alb_dns }}
+    steps:
+      - name: Approval wait time
+        id: approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          done_at="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '.jobs[] | select(.name == "prepare") | .completed_at')"
+          wait=$(( $(date +%s) - $(date -d "${done_at}" +%s) ))
+          echo "seconds=${wait}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Start load (background) + baseline 30s
+        run: |
+          nohup scripts/load/load.sh --target "http://${ALB}" --duration 1800 --concurrency 4 --rps 20 \
+            --out load.csv > /dev/null 2>&1 &
+          echo $! > load.pid
+          sleep 30
+
+      - name: Switch listener → candidate 100%
+        id: switch
+        run: |
+          if [[ "${CANDIDATE}" == blue ]]; then w=(--blue 100 --green 0); else w=(--blue 0 --green 100); fi
+          echo "at_ms=$(scripts/aws/set-weights.sh "${w[@]}")" >> "$GITHUB_OUTPUT"
+
+      - name: Observe
+        id: observe
+        env:
+          SINCE: ${{ steps.switch.outputs.at_ms }}
+          SECONDS_TO_OBSERVE: ${{ inputs.observe_seconds }}
+        run: |
+          scripts/aws/observe.sh --csv load.csv --version "${IMAGE_TAG}" --color "${CANDIDATE}" \
+            --since-ms "${SINCE}" --seconds "${SECONDS_TO_OBSERVE}"
+
+      - name: Commit — SSM stable-color = candidate
+        run: aws ssm put-parameter --name /pda/stable-color --value "${CANDIDATE}" --overwrite >/dev/null
+
+      - name: Scale down previous color (load continues → drain 중 실패 0건 확인)
+        if: inputs.scale_down_previous
+        run: scripts/aws/scale-service.sh --color "${STABLE}" --count 0 --wait
+
+      - name: Rollback — stable 100%
+        id: rollback
+        if: failure() || cancelled()
+        run: |
+          pointer="$(aws ssm get-parameter --name /pda/stable-color --query Parameter.Value --output text)"
+          if [[ "${pointer}" == "${CANDIDATE}" ]]; then
+            echo "::warning::승격이 이미 커밋됨 (SSM=${CANDIDATE}) — 롤백하지 않음"
+            exit 0
+          fi
+          decided="$(perl -MTime::HiRes=time -e 'printf "%d", time * 1000')"
+          if [[ "${STABLE}" == blue ]]; then w=(--blue 100 --green 0); else w=(--blue 0 --green 100); fi
+          restored="$(scripts/aws/set-weights.sh "${w[@]}")"
+          echo "rollback_ms=$((restored - decided))" >> "$GITHUB_OUTPUT"
+          echo "decided_ms=${decided}" >> "$GITHUB_OUTPUT"
+          sleep 5
+          scripts/aws/scale-service.sh --color "${CANDIDATE}" --count 0
+
+      - name: Stop load + summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          OBSERVE_REASON: ${{ steps.observe.outputs.observe_reason }}
+          ROLLBACK_MS: ${{ steps.rollback.outputs.rollback_ms }}
+          APPROVAL_S: ${{ steps.approval.outputs.seconds }}
+          STARTED: ${{ needs.prepare.outputs.started }}
+          STABILIZE_S: ${{ needs.prepare.outputs.stabilize_seconds }}
+          STABLE_IMAGE: ${{ needs.prepare.outputs.stable_image }}
+        run: |
+          [[ -f load.pid ]] && { pkill -TERM -P "$(cat load.pid)" || true; kill "$(cat load.pid)" 2>/dev/null || true; sleep 2; }
+          total=$(( $(date +%s) - STARTED ))
+          if [[ "${RESULT}" == success ]]; then badge="PROMOTED"; else badge="ROLLED_BACK (${OBSERVE_REASON:-${RESULT}})"; fi
+          {
+            echo "## ${badge}"
+            [[ "${RESULT}" != success ]] && echo "> 빨간색 = 자동 롤백이 정상 동작한 결과"
+            echo ""
+            echo "\`${STABLE}\` (${STABLE_IMAGE}) → \`${CANDIDATE}\` (${IMAGE_TAG})"
+            echo ""
+            echo "| 단계 | 소요 |"
+            echo "| --- | --- |"
+            echo "| 후보 안정화 | ${STABILIZE_S:-?}s |"
+            echo "| 승인 대기 | ${APPROVAL_S:-?}s |"
+            echo "| 총 소요 (승인 대기 포함) | ${total}s |"
+            echo "| 총 소요 (승인 대기 제외) | $(( total - ${APPROVAL_S:-0} ))s |"
+            [[ -n "${ROLLBACK_MS}" ]] && echo "| **롤백 (판정 → 원복 검증)** | **${ROLLBACK_MS}ms** |"
+            echo ""
+            echo "### 러너 부하 요약"
+            [[ -f load.csv ]] && scripts/load/summarize.sh load.csv --format markdown || echo "(no samples)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload load CSV
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: blue-green-load-${{ github.run_id }}
+          path: load.csv
+          if-no-files-found: ignore
+
+  cleanup:
+    name: cleanup
+    needs: [prepare, switch]
+    # 승인 거절 / 대기 중 취소 시 띄워 둔 후보 태스크가 비용을 계속 쓰지 않게 한다
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.noop == 'false' && needs.switch.result != 'success'
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Scale candidate down (only if it receives no traffic)
+        run: |
+          state="$(scripts/aws/traffic-state.sh 2>/dev/null)"
+          weight="$(grep "^${CANDIDATE}_weight=" <<<"${state}" | cut -d= -f2)"
+          pointer="$(grep '^stable_color=' <<<"${state}" | cut -d= -f2)"
+          if [[ "${weight}" == 0 && "${pointer}" != "${CANDIDATE}" ]]; then
+            scripts/aws/scale-service.sh --color "${CANDIDATE}" --count 0
+            echo "## ABORTED — 후보 \`${CANDIDATE}\` 축소 (트래픽 0%)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::후보 가중치 ${weight}, pointer ${pointer} — 축소하지 않음"
+          fi

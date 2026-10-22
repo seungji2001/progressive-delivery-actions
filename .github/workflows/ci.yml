@@ -1,0 +1,181 @@
+name: ci
+
+on:
+  pull_request:
+    paths: ["app/**", "scripts/**", ".github/workflows/**"]
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "다시 빌드할 기존 태그 (예: v1.0.0)"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
+      - name: Unit tests
+        working-directory: app
+        run: ./gradlew test --no-daemon
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-report
+          path: app/build/reports/tests/test
+
+      - name: shellcheck
+        run: shellcheck -x scripts/*/*.sh
+
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+
+  image:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04-arm # 네이티브 arm64 (Fargate ARM64 와 일치, QEMU 대비 수 배 빠름)
+    permissions:
+      contents: read
+      id-token: write # OIDC
+      security-events: write # Trivy SARIF → code scanning
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Resolve image tag
+        id: meta
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          short="$(git rev-parse --short HEAD)"
+          if [[ -n "${INPUT_REF}" ]]; then
+            tag="${INPUT_REF}"
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="sha-${short}"
+          fi
+          {
+            echo "tag=${tag}"
+            echo "sha=${short}"
+            echo "started=$(date +%s)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build (arm64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: coupon-api:${{ steps.meta.outputs.tag }}
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.tag }}
+            GIT_SHA=${{ steps.meta.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy — block on CRITICAL
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: coupon-api:${{ steps.meta.outputs.tag }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: Trivy — report HIGH/CRITICAL (SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: coupon-api:${{ steps.meta.outputs.tag }}
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy.sarif
+          skip-setup-trivy: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_CI }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - name: Push (idempotent — ECR is IMMUTABLE)
+        id: push
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          remote="${REGISTRY}/${ECR_REPOSITORY}:${TAG}"
+          if aws ecr describe-images --repository-name "${ECR_REPOSITORY}" --image-ids "imageTag=${TAG}" >/dev/null 2>&1; then
+            echo "::notice::${TAG} already exists in ECR — skip push (IMMUTABLE)"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+          else
+            docker tag "coupon-api:${TAG}" "${remote}"
+            docker push "${remote}"
+            echo "pushed=true" >> "$GITHUB_OUTPUT"
+          fi
+          digest="$(aws ecr describe-images --repository-name "${ECR_REPOSITORY}" --image-ids "imageTag=${TAG}" \
+            --query 'imageDetails[0].imageDigest' --output text)"
+          size="$(aws ecr describe-images --repository-name "${ECR_REPOSITORY}" --image-ids "imageTag=${TAG}" \
+            --query 'imageDetails[0].imageSizeInBytes' --output text)"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "size_mb=$((size / 1024 / 1024))" >> "$GITHUB_OUTPUT"
+
+      - name: Job summary
+        if: always()
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          STARTED: ${{ steps.meta.outputs.started }}
+          PUSHED: ${{ steps.push.outputs.pushed }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          SIZE: ${{ steps.push.outputs.size_mb }}
+        run: |
+          high="$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy.sarif 2>/dev/null || echo "-")"
+          {
+            echo "## Image \`${TAG}\`"
+            echo "| 항목 | 값 |"
+            echo "| --- | --- |"
+            echo "| ECR push | ${PUSHED:-not reached} |"
+            echo "| digest | \`${DIGEST:--}\` |"
+            echo "| 압축 크기 | ${SIZE:--} MB |"
+            echo "| Trivy HIGH/CRITICAL 결과 수 | ${high} |"
+            echo "| 빌드+스캔+push 소요 | $(( $(date +%s) - STARTED ))s |"
+          } >> "$GITHUB_STEP_SUMMARY"

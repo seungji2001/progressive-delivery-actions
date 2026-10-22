@@ -76,7 +76,7 @@ progressive-delivery-actions/
 | 1 | 쿠폰 API v1 (Spring Boot) + Docker + 단위 테스트 | `app/` ✅ |
 | 2 | 로컬 docker compose + nginx 가중치로 Blue-Green/카나리 개념 검증 | `infra/local/` ✅ |
 | 3 | Terraform 으로 AWS 인프라 구성 + GitHub OIDC | `infra/terraform/` ✅ (apply 전) |
-| 4 | CI + Blue-Green 워크플로우 | `blue-green.yml` |
+| 4 | CI + Blue-Green 워크플로우 | `.github/workflows/` ✅ (AWS 실행 전) |
 | 5 | 카나리 워크플로우 + 지표 게이트 + 자동 롤백 | `canary.yml` |
 | 6 | v3 장애 주입 → 자동 롤백 시연 녹화 | `docs/` GIF |
 | 7 | 포트폴리오 문서화 (문제 → 설계 → 결과 → 회고) | README |

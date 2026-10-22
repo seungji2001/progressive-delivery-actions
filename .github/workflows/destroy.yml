@@ -1,0 +1,76 @@
+name: destroy-runtime
+
+# 시연 직후 runtime 스택(VPC, ALB, ECS, CloudWatch)을 삭제해 비용을 막는다.
+# bootstrap 스택(state 버킷, OIDC Role, ECR)은 절대 건드리지 않는다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "삭제하려면 destroy-runtime 을 입력"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: pda-traffic
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    if: inputs.confirm == 'destroy-runtime'
+    runs-on: ubuntu-latest
+    environment: infra # 승인 필요
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: infra/terraform/runtime
+    env:
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_INFRA }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+
+      # AWS_REGION 은 configure-aws-credentials 가 export 한다
+      - name: terraform init
+        env:
+          BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${BUCKET}" \
+            -backend-config="key=runtime/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="use_lockfile=true" \
+            -backend-config="encrypt=true"
+
+      - name: terraform destroy
+        id: destroy
+        run: |
+          start=$(date +%s)
+          terraform destroy -auto-approve -input=false -no-color
+          echo "seconds=$(( $(date +%s) - start ))" >> "$GITHUB_OUTPUT"
+
+      - name: Verify nothing left
+        if: always()
+        run: |
+          left="$(aws resourcegroupstaggingapi get-resources \
+            --tag-filters Key=Project,Values=progressive-delivery-actions Key=Stack,Values=runtime \
+            --query 'ResourceTagMappingList[].ResourceARN' --output text)"
+          {
+            echo "## runtime destroy"
+            echo "- 소요: ${{ steps.destroy.outputs.seconds }}s"
+            if [[ -z "${left}" ]]; then
+              echo "- 남은 runtime 리소스: 없음"
+            else
+              echo "- 남은 runtime 리소스 (태그 API 는 삭제 반영이 늦을 수 있음):"
+              tr '\t' '\n' <<<"${left}" | sed 's/^/  - /'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

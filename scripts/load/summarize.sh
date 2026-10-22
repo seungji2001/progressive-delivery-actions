@@ -56,6 +56,9 @@ awk -F, -v fmt="${format}" -v pct="${percentiles}" '
 			printf "{\"total\":%d,\"duration_s\":%.1f,\"5xx\":%d,\"5xx_rate\":%.4f,\"conn_fail\":%d,\"p50_ms\":%d,\"p95_ms\":%d,\"p99_ms\":%d,\"versions\":{", total, dur, e5, rate, conn + 0, p[1], p[2], p[3]
 			sep = ""
 			for (v in vers) { printf "%s\"%s\":%d", sep, v, vers[v]; sep = "," }
+			printf "},\"versions_5xx\":{"
+			sep = ""
+			for (v in vers) { printf "%s\"%s\":%d", sep, v, ve5[v] + 0; sep = "," }
 			printf "},\"codes\":{"
 			sep = ""
 			for (c in code) { printf "%s\"%s\":%d", sep, c, code[c]; sep = "," }
