@@ -13,6 +13,8 @@ env_set BLUE_TAG "${blue_tag}"
 env_set GREEN_TAG "${green_tag}"
 env_set BLUE_FAULT_RATE 0
 env_set GREEN_FAULT_RATE 0
+env_set BLUE_FAULT_DELAY_MS 0
+env_set GREEN_FAULT_DELAY_MS 0
 
 # nginx 가 처음 뜰 때 읽을 기본 upstream (blue 100 / green 0)
 cat >"${UPSTREAM_FILE}" <<'EOF'

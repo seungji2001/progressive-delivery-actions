@@ -4,7 +4,7 @@
 
 # 후보 색 컨테이너를 새 이미지로 재생성한다. 후보는 가중치 0(down) 상태라 사용자 트래픽이 가지 않는다.
 deploy_candidate() {
-	local color="$1" tag="$2" fault_rate="${3:-0}" upper
+	local color="$1" tag="$2" fault_rate="${3:-0}" fault_delay="${4:-0}" upper
 	upper="$(color_upper "${color}")"
 	docker image inspect "coupon-api:${tag}" >/dev/null 2>&1 || {
 		log "image coupon-api:${tag} not found (scripts/local/build-image.sh ${tag})"
@@ -16,7 +16,8 @@ deploy_candidate() {
 	fi
 	env_set "${upper}_TAG" "${tag}"
 	env_set "${upper}_FAULT_RATE" "${fault_rate}"
-	log "deploy ${color} ← coupon-api:${tag} (FAULT_RATE=${fault_rate})"
+	env_set "${upper}_FAULT_DELAY_MS" "${fault_delay}"
+	log "deploy ${color} ← coupon-api:${tag} (FAULT_RATE=${fault_rate}, FAULT_DELAY_MS=${fault_delay})"
 	compose up -d --no-deps --force-recreate "${color}" >/dev/null 2>&1
 	wait_ready "${color}" 90
 }

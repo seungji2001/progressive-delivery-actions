@@ -31,7 +31,8 @@ scripts/local/up.sh
 # 3) 시나리오
 scripts/local/blue-green.sh v2.0.0 --observe 20 --scale-down    # A. Blue-Green
 scripts/local/up.sh && scripts/local/canary.sh v2.0.0           # B. 카나리 정상 승격
-scripts/local/up.sh && scripts/local/canary.sh v2.0.0 --fault-rate 0.3   # C. 카나리 자동 롤백
+scripts/local/up.sh && scripts/local/canary.sh v2.0.0 --fault-rate 0.3   # C. 카나리 자동 롤백 (5xx)
+scripts/local/up.sh v2.0.0 v2.0.0 && scripts/local/canary.sh v2.1.0 --fault-delay-ms 800   # E. 카나리 자동 롤백 (p95)
 
 # 정리
 docker compose -f infra/local/compose.yaml down
@@ -79,6 +80,19 @@ docker compose -f infra/local/compose.yaml down
 | **롤백 소요 (판정 → 가중치 원복)** | **618ms** |
 | 판정 → 마지막 후보 응답 | 676ms |
 | 사용자 영향 | 전체 958건 중 5xx 19건 (1.98%) — 10% 카나리로 영향 범위 제한 |
+
+### E. 카나리 p95 롤백 (`v2.0.0` → `v2.1.0`, 후보에만 `FAULT_DELAY_MS=800`)
+
+| 항목 | 값 |
+| --- | --- |
+| 판정 | 10% 단계에서 후보 p95 883ms > 500ms → fail |
+| **롤백 소요 (판정 → 가중치 원복)** | **767ms** |
+| 판정 → 마지막 후보 응답 | 1,537ms (지연된 진행 중 요청이 끝나는 시간) |
+| 사용자 영향 | 전체 616건 중 후보 응답 42건 (6.8%), 5xx 0 |
+
+### F. fast guard 조기 감지 (가중치 50%, 후보 `FAULT_RATE=0.3`)
+
+`scripts/load/fast-guard.sh --follow` 가 **약 2.1초** 만에 감지 (후보 24건 중 5xx 3건 → exit 10). CloudWatch 지표는 60초 해상도 + 수집 지연이 있어 AWS 에서는 이 조기 감지 층이 롤백 시간을 줄인다.
 
 ### D. 종료 순서 검증 (부하 중 green 컨테이너 정지)
 

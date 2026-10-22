@@ -8,7 +8,7 @@ source "$(dirname "$0")/deploy-lib.sh"
 
 usage() {
 	cat <<'EOF'
-Usage: canary.sh <new-tag> [--steps 10,50,100] [--window <sec>] [--fault-rate <0-1>]
+Usage: canary.sh <new-tag> [--steps 10,50,100] [--window <sec>] [--fault-rate <0-1>] [--fault-delay-ms <ms>]
                  [--max-5xx-rate 0.01] [--max-p95-ms 500] [--min-requests 30] [--no-load]
 
   각 단계: 가중치 변경 → window 초 관찰 → gate.sh (0 통과 / 10 임계 초과 / 11 표본 부족)
@@ -17,12 +17,13 @@ Result: PROMOTED / ROLLED_BACK / ABORTED_BEFORE_SWITCH / NO_OP
 EOF
 }
 
-tag="" steps="10,50,100" window=20 fault_rate=0 max_rate=0.01 max_p95=500 min_req=30 with_load=true
+tag="" steps="10,50,100" window=20 fault_rate=0 fault_delay=0 max_rate=0.01 max_p95=500 min_req=30 with_load=true
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 		--steps) steps="$2"; shift 2 ;;
 		--window) window="$2"; shift 2 ;;
 		--fault-rate) fault_rate="$2"; shift 2 ;;
+		--fault-delay-ms) fault_delay="$2"; shift 2 ;;
 		--max-5xx-rate) max_rate="$2"; shift 2 ;;
 		--max-p95-ms) max_p95="$2"; shift 2 ;;
 		--min-requests) min_req="$2"; shift 2 ;;
@@ -47,7 +48,7 @@ weights_for() { # <candidate-percent>
 
 t_start="$(now_ms)"
 log "stable=${stable}(${stable_tag}) candidate=${candidate}(${tag}) steps=${steps}"
-deploy_candidate "${candidate}" "${tag}" "${fault_rate}"
+deploy_candidate "${candidate}" "${tag}" "${fault_rate}" "${fault_delay}"
 smoke "${candidate}" "${tag}" || { echo "RESULT=ABORTED_BEFORE_SWITCH"; exit 1; }
 
 csv="${LOCAL_DIR}/.logs/canary-$(date +%Y%m%d-%H%M%S).csv"

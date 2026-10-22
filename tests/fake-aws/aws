@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# canary-run.sh 오프라인 테스트용 가짜 aws CLI. 리스너 가중치를 FAKE_AWS_STATE 파일에 저장한다.
+set -euo pipefail
+state="${FAKE_AWS_STATE:?}"
+[[ -f "${state}" ]] || echo '{"blue":100,"green":0}' >"${state}"
+tg_arn() { echo "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:targetgroup/pda-$1/abc$1"; }
+case "$1 $2" in
+	"elbv2 describe-load-balancers") echo "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:loadbalancer/app/pda-alb/xyz" ;;
+	"elbv2 describe-listeners")
+		if [[ " $* " == *" --load-balancer-arn "* ]]; then
+			echo "arn:aws:elasticloadbalancing:ap-northeast-2:111122223333:listener/app/pda-alb/xyz/l1"
+		else
+			jq -c --arg b "$(tg_arn blue)" --arg g "$(tg_arn green)" '[{TargetGroupArn: $b, Weight: .blue}, {TargetGroupArn: $g, Weight: .green}]' "${state}"
+		fi ;;
+	"elbv2 describe-target-groups")
+		for a in "$@"; do case "$a" in pda-blue) tg_arn blue ;; pda-green) tg_arn green ;; esac; done ;;
+	"elbv2 modify-listener")
+		while [[ $# -gt 0 ]]; do [[ "$1" == --default-actions ]] && actions="$2"; shift; done
+		jq -c '.[0].ForwardConfig.TargetGroups | {blue: (map(select(.TargetGroupArn | test("pda-blue")))[0].Weight), green: (map(select(.TargetGroupArn | test("pda-green")))[0].Weight)}' <<<"${actions}" >"${state}"
+		echo '{}' ;;
+	*) echo "fake aws: unsupported $*" >&2; exit 1 ;;
+esac

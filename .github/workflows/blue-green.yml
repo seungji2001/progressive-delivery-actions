@@ -46,6 +46,9 @@ jobs:
       candidate: ${{ steps.state.outputs.candidate_color }}
       stable_image: ${{ steps.current.outputs.stable_image }}
       alb_dns: ${{ steps.res.outputs.alb_dns }}
+      lb_suffix: ${{ steps.res.outputs.lb_suffix }}
+      tg_blue_suffix: ${{ steps.res.outputs.tg_blue_suffix }}
+      tg_green_suffix: ${{ steps.res.outputs.tg_green_suffix }}
       started: ${{ steps.start.outputs.started }}
       stabilize_seconds: ${{ steps.deploy.outputs.stabilize_seconds }}
     steps:
@@ -157,14 +160,20 @@ jobs:
           if [[ "${CANDIDATE}" == blue ]]; then w=(--blue 100 --green 0); else w=(--blue 0 --green 100); fi
           echo "at_ms=$(scripts/aws/set-weights.sh "${w[@]}")" >> "$GITHUB_OUTPUT"
 
-      - name: Observe
+      - name: Observe (fast guard → CloudWatch metric gate)
         id: observe
         env:
-          SINCE: ${{ steps.switch.outputs.at_ms }}
+          SINCE_MS: ${{ steps.switch.outputs.at_ms }}
           SECONDS_TO_OBSERVE: ${{ inputs.observe_seconds }}
+          TG_SUFFIX: ${{ needs.prepare.outputs.candidate == 'blue' && needs.prepare.outputs.tg_blue_suffix || needs.prepare.outputs.tg_green_suffix }}
+          LB_SUFFIX: ${{ needs.prepare.outputs.lb_suffix }}
+          GATE_MAX_5XX_RATE: ${{ vars.GATE_MAX_5XX_RATE || '0.01' }}
+          GATE_MAX_P95_MS: ${{ vars.GATE_MAX_P95_MS || '500' }}
+          GATE_MIN_REQUESTS: ${{ vars.GATE_MIN_REQUESTS || '50' }}
         run: |
-          scripts/aws/observe.sh --csv load.csv --version "${IMAGE_TAG}" --color "${CANDIDATE}" \
-            --since-ms "${SINCE}" --seconds "${SECONDS_TO_OBSERVE}"
+          scripts/aws/observe.sh --csv load.csv --version "${IMAGE_TAG}" \
+            --tg-suffix "${TG_SUFFIX}" --lb-suffix "${LB_SUFFIX}" \
+            --since "$((SINCE_MS / 1000))" --seconds "${SECONDS_TO_OBSERVE}"
 
       - name: Commit — SSM stable-color = candidate
         run: aws ssm put-parameter --name /pda/stable-color --value "${CANDIDATE}" --overwrite >/dev/null

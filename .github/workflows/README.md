@@ -4,7 +4,7 @@
 | --- | --- | --- | --- |
 | `ci.yml` | PR, push main, tag `v*.*.*`, 수동(`ref`) | 테스트 · shellcheck · actionlint → arm64 이미지 빌드 → Trivy → ECR push | `pda-gha-ci` |
 | `blue-green.yml` | 수동 (`image_tag`) | 비활성 색 배포 → 스모크 → **승인** → 100% 전환 → 관찰 → 실패 시 원복 | `pda-gha-deploy` |
-| `canary.yml` | 수동 (5단계) | 10 → 50 → **승인** → 100%, 단계별 지표 게이트 + 자동 롤백 | `pda-gha-deploy` |
+| `canary.yml` | 수동 (`mode=deploy\|recover`) | 10 → 50 → **승인** → 재판정 → 100%, 단계별 지표 게이트 + 자동 롤백 / 중단된 배포 복구 | `pda-gha-deploy` |
 | `destroy.yml` | 수동 (`confirm=destroy-runtime`) | runtime 스택 삭제 (bootstrap 은 유지) | `pda-gha-infra` |
 
 ## 레포 설정 (사용자가 직접)
@@ -54,6 +54,43 @@ flowchart TD
     K --> P[PROMOTED]
 ```
 
+## canary.yml 흐름
+
+```mermaid
+flowchart TD
+    P[prepare · preview<br/>상태 검사 → 후보 배포 → 스모크] --> C[canary · preview<br/>러너 부하 시작]
+    C --> S1[10%] --> G1{60s 지표 지연 후<br/>30s 간격 판정}
+    G1 -- "fast-guard 실패 / 5xx·p95 초과 / 표본 부족 시간 초과" --> RB[즉시 stable 100%<br/>롤백 시간 2종 측정 → 후보 0]
+    G1 -- 통과 + 최소 관찰 --> S2[50%] --> G2{판정} 
+    G2 -- 실패 --> RB
+    G2 -- 통과 --> A[[production 승인]]
+    A -- 거절/취소 --> CL[cleanup: 가중치 원복 → 후보 축소]
+    A -- 승인 --> RG{50% 재판정<br/>승인 대기 중 악화 대비}
+    RG -- 실패 --> RB
+    RG -- 통과 --> S3[100%] --> G3{최종 판정}
+    G3 -- 실패 --> RB
+    G3 -- 통과 --> CM[SSM 커밋 → 이전 색 축소] --> OK[PROMOTED]
+```
+
+### 두 층 게이트
+
+| 게이트 | 원천 | 장점 | 한계 | 역할 |
+| --- | --- | --- | --- | --- |
+| `metric-gate.sh` | CloudWatch ALB 지표 (TG 단위) | 서버 측, 전체 트래픽 | 60초 해상도 + 1~2분 지연 | **권위 있는 판정** (5xx 비율, p95, 최소 요청 수) |
+| `fast-guard.sh` | 러너 부하 CSV (`X-App-Version`) | 지연 없음 (로컬 측정 약 2초 감지) | 합성 트래픽만 봄 | **조기 감지** |
+
+- 둘 중 하나라도 실패하면 롤백한다. 표본 부족(11)도 최대 대기 시간을 넘기면 롤백 — 증거 없이 승격하지 않는다.
+- 5xx 데이터 포인트가 없으면 0 으로 본다. p95 는 창 전체를 period 하나로 조회한다(percentile 은 평균할 수 없음).
+- 임계값은 Variables 로 덮어쓸 수 있다: `GATE_MAX_5XX_RATE`(0.01), `GATE_MAX_P95_MS`(500), `GATE_MIN_REQUESTS`(50), `GATE_WINDOW_SECONDS`(180), `GATE_MAX_WAIT_SECONDS`(420).
+- 롤백 시간은 두 가지로 잰다: **판정 → 가중치 원복 검증**(파이프라인 반응 시간), **판정 → 마지막 후보 응답**(사용자 영향 종료).
+
+### 오프라인 테스트 (CI 의 test job 에서 실행)
+
+```bash
+scripts/aws/test-metric-gate.sh   # fixture 5종: 통과 / 5xx 초과 / p95 초과 / 5xx 데이터 없음 / 표본 부족
+tests/test-canary-run.sh          # 가짜 aws CLI 로 단계 진행·롤백 판정·가중치 상태 검증
+```
+
 ## 실패 시나리오별 동작
 
 | 시나리오 | 트래픽 | 동작 | 결과 배지 |
@@ -82,8 +119,12 @@ flowchart TD
 
 ## AWS 시연 절차
 
-1. `git push origin main v1.0.0 v2.0.0` → `ci.yml` 이 두 태그 이미지를 ECR 에 push
+1. `git push origin main v1.0.0 v2.0.0 v2.1.0` → `ci.yml` 이 태그 이미지를 ECR 에 push
 2. `infra/terraform/runtime` apply (blue = v1.0.0)
 3. `blue-green.yml` `image_tag=v2.0.0` → 승인 → **PROMOTED** 확인
 4. `blue-green.yml` `image_tag=v1.0.0`, `fault_rate=0.5` → 승인 → 관찰 중 **ROLLED_BACK** 확인
-5. `destroy.yml` `confirm=destroy-runtime`
+5. `canary.yml` `image_tag=v2.1.0` (stable = v2.0.0) → 10 → 50 → 승인 → **PROMOTED**
+6. `canary.yml` `fault_rate=0.2` → 10% 단계에서 **ROLLED_BACK(5xx)**
+7. `canary.yml` `fault_delay_ms=800` → **ROLLED_BACK(p95)**
+8. 실행 중 Cancel → 다음 실행이 상태 불일치로 거부 → `canary.yml mode=recover` → **RECOVERED**
+9. `destroy.yml` `confirm=destroy-runtime`

@@ -1,0 +1,381 @@
+name: canary
+
+# 비활성 색에 새 이미지 배포 → 10% → 50% (단계별 지표 게이트) → [production 승인] → 재판정 → 100% → 커밋
+# 게이트 = CloudWatch metric-gate.sh(권위) + 러너 CSV fast-guard.sh(조기 감지). 실패 시 즉시 stable 100% 원복.
+# mode=recover: 중단된 배포로 가중치·SSM 이 어긋났을 때 stable 색 100% 로 복구한다.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [deploy, recover]
+        default: deploy
+      image_tag:
+        description: "배포할 이미지 태그 (deploy 모드, 예: v2.1.0)"
+        default: ""
+      steps:
+        description: "승인 전 카나리 단계(%) — 100 은 승인 후 promote 에서"
+        default: "10,50"
+      fault_rate:
+        description: "후보에만 주입할 FAULT_RATE (5xx 롤백 시연)"
+        default: "0"
+      fault_delay_ms:
+        description: "후보에만 주입할 FAULT_DELAY_MS (p95 롤백 시연, v2.1.0+)"
+        default: "0"
+
+permissions: {}
+
+concurrency:
+  group: pda-traffic
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  IMAGE_TAG: ${{ inputs.image_tag }}
+  GATE_MAX_5XX_RATE: ${{ vars.GATE_MAX_5XX_RATE || '0.01' }}
+  GATE_MAX_P95_MS: ${{ vars.GATE_MAX_P95_MS || '500' }}
+  GATE_MIN_REQUESTS: ${{ vars.GATE_MIN_REQUESTS || '50' }}
+  GATE_WINDOW_SECONDS: ${{ vars.GATE_WINDOW_SECONDS || '180' }}
+  GATE_MAX_WAIT_SECONDS: ${{ vars.GATE_MAX_WAIT_SECONDS || '420' }}
+  # 10% 단계에서 GATE_MIN_REQUESTS(50)를 창(180s) 안에 넉넉히 채우려면 후보 ≥ 0.3 rps → 전체 ≥ 3 rps.
+  # 여유를 두고 전체 10 rps (10% 단계 후보 약 1 rps × 180s ≈ 180건).
+  LOAD_RPS: "10"
+
+jobs:
+  recover:
+    name: recover
+    if: inputs.mode == 'recover'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Restore stable color to 100%
+        run: |
+          state="$(scripts/aws/traffic-state.sh)"
+          stable="$(grep '^stable_color=' <<<"${state}" | cut -d= -f2)"
+          other="$(grep '^candidate_color=' <<<"${state}" | cut -d= -f2)"
+          before="blue=$(grep '^blue_weight=' <<<"${state}" | cut -d= -f2) green=$(grep '^green_weight=' <<<"${state}" | cut -d= -f2)"
+          if [[ "${stable}" == blue ]]; then w=(--blue 100 --green 0); else w=(--blue 0 --green 100); fi
+          scripts/aws/set-weights.sh "${w[@]}" >/dev/null
+          scripts/aws/scale-service.sh --color "${other}" --count 0
+          {
+            echo "## RECOVERED"
+            echo "- SSM stable-color: \`${stable}\` → 리스너 ${stable} 100%"
+            echo "- 복구 전 가중치: ${before}"
+            echo "- \`${other}\` 서비스 0 으로 축소"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  prepare:
+    name: prepare
+    if: inputs.mode == 'deploy'
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      noop: ${{ steps.current.outputs.noop }}
+      stable: ${{ steps.state.outputs.stable_color }}
+      candidate: ${{ steps.state.outputs.candidate_color }}
+      stable_image: ${{ steps.current.outputs.stable_image }}
+      alb_dns: ${{ steps.res.outputs.alb_dns }}
+      lb_suffix: ${{ steps.res.outputs.lb_suffix }}
+      tg_suffix: ${{ steps.state.outputs.candidate_color == 'blue' && steps.res.outputs.tg_blue_suffix || steps.res.outputs.tg_green_suffix }}
+      started: ${{ steps.start.outputs.started }}
+      stabilize_seconds: ${{ steps.deploy.outputs.stabilize_seconds }}
+    steps:
+      - id: start
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Require image_tag
+        if: inputs.image_tag == ''
+        run: |
+          echo "::error::deploy 모드에는 image_tag 가 필요하다"
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - id: res
+        run: scripts/aws/resolve-resources.sh
+
+      - name: Traffic state (refuse if inconsistent)
+        id: state
+        run: |
+          scripts/aws/traffic-state.sh
+          if grep -q '^consistent=false' "$GITHUB_OUTPUT"; then
+            echo "::error::트래픽 상태 불일치 — canary.yml mode=recover 로 복구 후 다시 실행"
+            exit 1
+          fi
+
+      - name: Current stable image
+        id: current
+        env:
+          STABLE: ${{ steps.state.outputs.stable_color }}
+        run: |
+          td="$(aws ecs describe-services --cluster pda-cluster --services "pda-${STABLE}" \
+            --query 'services[0].taskDefinition' --output text)"
+          image="$(aws ecs describe-task-definition --task-definition "${td}" \
+            --query 'taskDefinition.containerDefinitions[0].image' --output text)"
+          tag="${image##*:}"
+          echo "stable_image=${tag}" >> "$GITHUB_OUTPUT"
+          if [[ "${tag}" == "${IMAGE_TAG}" ]]; then
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+            echo "## NO_OP — \`${STABLE}\` already runs \`${IMAGE_TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "noop=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy candidate (fault env 는 후보에만)
+        id: deploy
+        if: steps.current.outputs.noop == 'false'
+        env:
+          CANDIDATE: ${{ steps.state.outputs.candidate_color }}
+          FAULT_RATE: ${{ inputs.fault_rate }}
+          FAULT_DELAY_MS: ${{ inputs.fault_delay_ms }}
+        run: |
+          scripts/aws/deploy-candidate.sh --color "${CANDIDATE}" --image-tag "${IMAGE_TAG}" \
+            --env "FAULT_RATE=${FAULT_RATE}" --env "FAULT_DELAY_MS=${FAULT_DELAY_MS}"
+
+      - name: Smoke test (X-Target-Color)
+        if: steps.current.outputs.noop == 'false'
+        env:
+          CANDIDATE: ${{ steps.state.outputs.candidate_color }}
+          ALB: ${{ steps.res.outputs.alb_dns }}
+        run: scripts/aws/smoke-test.sh --base-url "http://${ALB}" --color "${CANDIDATE}" --expect-version "${IMAGE_TAG}"
+
+      - name: Abort — scale candidate down
+        if: failure() && steps.state.outputs.consistent == 'true'
+        env:
+          CANDIDATE: ${{ steps.state.outputs.candidate_color }}
+        run: |
+          scripts/aws/scale-service.sh --color "${CANDIDATE}" --count 0
+          echo "## ABORTED_BEFORE_SWITCH — 리스너를 건드리지 않았으므로 롤백할 트래픽 없음" >> "$GITHUB_STEP_SUMMARY"
+
+  canary:
+    name: canary
+    needs: prepare
+    if: needs.prepare.outputs.noop == 'false'
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STABLE: ${{ needs.prepare.outputs.stable }}
+      CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+      ALB: ${{ needs.prepare.outputs.alb_dns }}
+      TG_SUFFIX: ${{ needs.prepare.outputs.tg_suffix }}
+      LB_SUFFIX: ${{ needs.prepare.outputs.lb_suffix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Start load (background)
+        run: |
+          nohup scripts/load/load.sh --target "http://${ALB}" --duration 3600 --concurrency 4 --rps "${LOAD_RPS}" \
+            --out load.csv > /dev/null 2>&1 &
+          echo $! > load.pid
+          sleep 10
+
+      - name: Canary steps
+        env:
+          STEPS: ${{ inputs.steps }}
+        run: |
+          scripts/aws/canary-run.sh --steps "${STEPS}" --candidate "${CANDIDATE}" --version "${IMAGE_TAG}" \
+            --tg-suffix "${TG_SUFFIX}" --lb-suffix "${LB_SUFFIX}" --csv load.csv --report canary-report.json
+
+      - name: Rollback — stable 100%
+        id: rollback
+        if: failure() || cancelled()
+        run: |
+          decided="$(cat gate-decision.ms 2>/dev/null || perl -MTime::HiRes=time -e 'printf "%d", time * 1000')"
+          if [[ "${STABLE}" == blue ]]; then w=(--blue 100 --green 0); else w=(--blue 0 --green 100); fi
+          restored="$(scripts/aws/set-weights.sh "${w[@]}")"
+          sleep 5
+          last="$(awk -F, -v v="${IMAGE_TAG}" -v s="${decided}" 'NR > 1 && $3 == v && $1 >= s && $1 > m { m = $1 } END { print m + 0 }' load.csv 2>/dev/null || echo 0)"
+          {
+            echo "rollback_ms=$((restored - decided))"
+            echo "user_impact_ms=$(( last > 0 ? last - decided : 0 ))"
+            echo "reason=$(cat gate-reason 2>/dev/null || echo cancelled)"
+          } >> "$GITHUB_OUTPUT"
+          scripts/aws/scale-service.sh --color "${CANDIDATE}" --count 0
+
+      - name: Stop load + summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          ROLLBACK_MS: ${{ steps.rollback.outputs.rollback_ms }}
+          IMPACT_MS: ${{ steps.rollback.outputs.user_impact_ms }}
+          REASON: ${{ steps.rollback.outputs.reason }}
+        run: |
+          [[ -f load.pid ]] && { pkill -TERM -P "$(cat load.pid)" || true; kill "$(cat load.pid)" 2>/dev/null || true; sleep 2; }
+          scripts/aws/canary-summary.sh --title "canary ${STABLE} → ${CANDIDATE} (${IMAGE_TAG})" \
+            --result "${RESULT}" --reason "${REASON}" --rollback-ms "${ROLLBACK_MS}" --impact-ms "${IMPACT_MS}" \
+            --report canary-report.json --csv load.csv >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: canary-${{ github.run_id }}
+          path: |
+            canary-report.json
+            load.csv
+          if-no-files-found: ignore
+
+  promote:
+    name: promote
+    needs: [prepare, canary]
+    runs-on: ubuntu-latest
+    environment: production # ← required reviewer 승인 지점 (100% 직전)
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    env:
+      STABLE: ${{ needs.prepare.outputs.stable }}
+      CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+      ALB: ${{ needs.prepare.outputs.alb_dns }}
+      TG_SUFFIX: ${{ needs.prepare.outputs.tg_suffix }}
+      LB_SUFFIX: ${{ needs.prepare.outputs.lb_suffix }}
+    steps:
+      - name: Approval wait time
+        id: approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          done_at="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs" \
+            --jq '.jobs[] | select(.name == "canary") | .completed_at')"
+          echo "seconds=$(( $(date +%s) - $(date -d "${done_at}" +%s) ))" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Start load (background)
+        run: |
+          nohup scripts/load/load.sh --target "http://${ALB}" --duration 3600 --concurrency 4 --rps "${LOAD_RPS}" \
+            --out load.csv > /dev/null 2>&1 &
+          echo $! > load.pid
+          sleep 10
+
+      # 승인 대기 동안에는 아무도 지표를 보지 않았다 → 현재 가중치에서 다시 판정한 뒤 100% 로 간다
+      - name: Re-gate at last step, then 100%
+        env:
+          STEPS: ${{ inputs.steps }}
+        run: |
+          last="${STEPS##*,}"
+          scripts/aws/canary-run.sh --steps "${last},100" --candidate "${CANDIDATE}" --version "${IMAGE_TAG}" \
+            --tg-suffix "${TG_SUFFIX}" --lb-suffix "${LB_SUFFIX}" --csv load.csv --report promote-report.json
+
+      - name: Commit — SSM stable-color = candidate
+        run: aws ssm put-parameter --name /pda/stable-color --value "${CANDIDATE}" --overwrite >/dev/null
+
+      - name: Scale down previous color (load continues → drain 중 실패 0건 확인)
+        run: scripts/aws/scale-service.sh --color "${STABLE}" --count 0 --wait
+
+      - name: Rollback — stable 100%
+        id: rollback
+        if: failure() || cancelled()
+        run: |
+          pointer="$(aws ssm get-parameter --name /pda/stable-color --query Parameter.Value --output text)"
+          if [[ "${pointer}" == "${CANDIDATE}" ]]; then
+            echo "::warning::승격이 이미 커밋됨 (SSM=${CANDIDATE}) — 롤백하지 않음"
+            exit 0
+          fi
+          decided="$(cat gate-decision.ms 2>/dev/null || perl -MTime::HiRes=time -e 'printf "%d", time * 1000')"
+          if [[ "${STABLE}" == blue ]]; then w=(--blue 100 --green 0); else w=(--blue 0 --green 100); fi
+          restored="$(scripts/aws/set-weights.sh "${w[@]}")"
+          sleep 5
+          last="$(awk -F, -v v="${IMAGE_TAG}" -v s="${decided}" 'NR > 1 && $3 == v && $1 >= s && $1 > m { m = $1 } END { print m + 0 }' load.csv 2>/dev/null || echo 0)"
+          {
+            echo "rollback_ms=$((restored - decided))"
+            echo "user_impact_ms=$(( last > 0 ? last - decided : 0 ))"
+            echo "reason=$(cat gate-reason 2>/dev/null || echo cancelled)"
+          } >> "$GITHUB_OUTPUT"
+          scripts/aws/scale-service.sh --color "${CANDIDATE}" --count 0
+
+      - name: Stop load + summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          ROLLBACK_MS: ${{ steps.rollback.outputs.rollback_ms }}
+          IMPACT_MS: ${{ steps.rollback.outputs.user_impact_ms }}
+          REASON: ${{ steps.rollback.outputs.reason }}
+          APPROVAL_S: ${{ steps.approval.outputs.seconds }}
+          STARTED: ${{ needs.prepare.outputs.started }}
+          STABILIZE_S: ${{ needs.prepare.outputs.stabilize_seconds }}
+        run: |
+          [[ -f load.pid ]] && { pkill -TERM -P "$(cat load.pid)" || true; kill "$(cat load.pid)" 2>/dev/null || true; sleep 2; }
+          total=$(( $(date +%s) - STARTED ))
+          scripts/aws/canary-summary.sh --title "promote ${STABLE} → ${CANDIDATE} (${IMAGE_TAG})" \
+            --result "${RESULT}" --reason "${REASON}" --rollback-ms "${ROLLBACK_MS}" --impact-ms "${IMPACT_MS}" \
+            --report promote-report.json --csv load.csv >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "| 타이밍 | 값 |"
+            echo "| --- | --- |"
+            echo "| 후보 안정화 | ${STABILIZE_S:-?}s |"
+            echo "| 승인 대기 | ${APPROVAL_S:-?}s |"
+            echo "| 총 소요 (승인 대기 포함 / 제외) | ${total}s / $(( total - ${APPROVAL_S:-0} ))s |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: promote-${{ github.run_id }}
+          path: |
+            promote-report.json
+            load.csv
+          if-no-files-found: ignore
+
+  cleanup:
+    name: cleanup
+    needs: [prepare, canary, promote]
+    # 승인 거절 / 대기 중 취소: 후보가 50% 를 받은 채 남는다 → 가중치를 먼저 원복하고 그다음 축소
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.noop == 'false' && needs.promote.result != 'success'
+    runs-on: ubuntu-latest
+    environment: preview
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CANDIDATE: ${{ needs.prepare.outputs.candidate }}
+      STABLE: ${{ needs.prepare.outputs.stable }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_DEPLOY }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Restore weights, then scale candidate down
+        run: |
+          pointer="$(aws ssm get-parameter --name /pda/stable-color --query Parameter.Value --output text)"
+          if [[ "${pointer}" == "${CANDIDATE}" ]]; then
+            echo "::warning::승격이 이미 커밋됨 — 정리하지 않음"
+            exit 0
+          fi
+          if [[ "${STABLE}" == blue ]]; then w=(--blue 100 --green 0); else w=(--blue 0 --green 100); fi
+          scripts/aws/set-weights.sh "${w[@]}" >/dev/null
+          scripts/aws/scale-service.sh --color "${CANDIDATE}" --count 0
+          echo "## ABORTED — \`${STABLE}\` 100% 복원, 후보 \`${CANDIDATE}\` 축소" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,38 @@
+{
+  "MetricDataResults": [
+    {
+      "Id": "req",
+      "Label": "RequestCount",
+      "Timestamps": [
+        "2026-10-22T02:00:00Z"
+      ],
+      "Values": [
+        180.0
+      ],
+      "StatusCode": "Complete"
+    },
+    {
+      "Id": "e5xx",
+      "Label": "HTTPCode_Target_5XX_Count",
+      "Timestamps": [
+        "2026-10-22T02:00:00Z"
+      ],
+      "Values": [
+        0.0
+      ],
+      "StatusCode": "Complete"
+    },
+    {
+      "Id": "p95",
+      "Label": "TargetResponseTime",
+      "Timestamps": [
+        "2026-10-22T02:00:00Z"
+      ],
+      "Values": [
+        0.883
+      ],
+      "StatusCode": "Complete"
+    }
+  ],
+  "Messages": []
+}
