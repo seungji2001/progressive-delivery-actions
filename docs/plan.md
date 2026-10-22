@@ -80,7 +80,7 @@ progressive-delivery-actions/
 | 3 | Terraform 으로 AWS 인프라 구성 + GitHub OIDC | `infra/terraform/` ✅ AWS 적용 |
 | 4 | CI + Blue-Green 워크플로우 | `.github/workflows/` ✅ AWS 실측 |
 | 5 | 카나리 워크플로우 + 지표 게이트 + 자동 롤백 | `canary.yml` ✅ AWS 실측 |
-| 6 | v3 장애 주입 → 자동 롤백 시연 녹화 | `docs/` GIF |
+| 6 | v3 장애 주입 → 자동 롤백 시연 녹화 | `docs/demo/` GIF ✅ |
 | 7 | 포트폴리오 문서화 (문제 → 설계 → 결과 → 회고) | README ✅ |
 
 ## 6. 포트폴리오에 남길 수치

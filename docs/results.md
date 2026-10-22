@@ -15,6 +15,7 @@
 | 3 | 카나리 후보에 `FAULT_RATE=0.2` | **ROLLED_BACK(fast-guard:5xx)** | 10% 단계에서 차단, 전체 5xx 1.89% |
 | 4 | 카나리 후보에 `FAULT_DELAY_MS=800` | **ROLLED_BACK(p95)** | CloudWatch p95 **805ms** > 500ms, 10% 단계에서 차단 |
 | 5 | 카나리 `v2.0.1 → v2.1.1` | **PROMOTED** | 10 → 50 → 승인 → 50 재판정 → 100, 요청 4,455건 / **실패 0** |
+| 6 | 카나리 `v2.1.1 → v3.0.0` (**실제 코드 결함**, 주입 없음) | **ROLLED_BACK(fast-guard:5xx)** | 10% 전환 → 감지 **60s** → 원복 **7s** |
 
 ## 1. Blue-Green 승격
 
@@ -66,6 +67,32 @@
 - 총 소요 **16m21s** (05:48:31 → 06:04:52). 단계마다 최소 관찰 180s + 지표 지연 60s 가 대부분이다.
 - 승인 후 바로 100% 로 가지 않고 50% 에서 다시 판정했다 — 승인을 기다리는 동안 아무도 지표를 보지 않았기 때문이다.
 - 러너 부하 합계 4,455건, 실패 0.
+
+## 6. 실제 코드 결함 롤백 (`v3.0.0`, 녹화)
+
+![canary v3 auto rollback](demo/canary-v3-auto-rollback.gif)
+
+**결함** — v3 에 "회원 등급별 추가 할인"을 넣으면서 등급 보너스 표(`Map.of(0, 0L, 1, 500L, 3, 1000L)`)에 **등급 2 를 빠뜨렸다**. 등급 2 사용자는 `NullPointerException` → 500. 장애 주입(`FAULT_*`) 없이 코드 결함만으로 낸 장애다.
+
+| 검사 | 결과 | 이유 |
+| --- | --- | --- |
+| 단위 테스트 | 통과 | 테스트 사용자 `u-1` 은 등급 1 |
+| 스모크 테스트 | 통과 | `smoke` 는 등급 3 |
+| Trivy | 통과 | 의존성 문제가 아님 |
+| **카나리 10%** | **차단** | 실제 트래픽은 사용자마다 달라 약 25% 가 등급 2 |
+
+```
+07:28:47  SMOKE OK [green] v3.0.0                 ← 스모크는 통과
+07:29:17  listener weights: blue=90 green=10      ← 10% 노출
+07:30:17  step 10% FAILED: fast-guard             ← 60s 감지 (후보 21건 중 5xx 5건)
+07:30:24  listener weights: blue=100 green=0      ← 7s 원복
+```
+
+- 러너 부하 480건 중 5xx 6건(1.25%) — 10% 노출이 영향 범위를 제한했다. 후보가 응답한 구간은 61s.
+- fast guard 창을 30s → 120s 로 넓힌 뒤의 첫 AWS 측정: 감지 **123s → 60s**.
+- 녹화는 로컬 nginx 프록시(`infra/local/monitor-proxy`)로 모니터 페이지를 ALB 와 같은 오리진에 띄우고 브라우저 트래픽(약 20 rps)을 함께 보냈다. 화면의 5xx 수치는 브라우저 트래픽 기준이다. 차트의 세로 공백은 브라우저 요청이 잠시 없던 1초 구간이다.
+- 이 실행의 정리는 `destroy.yml` 로 했다 — 35 리소스 삭제 성공 (권한 수정 후 실제 삭제 경로 검증 완료).
+- 실행: [39740352525](https://github.com/seungji2001/progressive-delivery-actions/actions/runs/39740352525) · destroy [39741066827](https://github.com/seungji2001/progressive-delivery-actions/actions/runs/39741066827)
 
 ## 인프라 수명주기
 

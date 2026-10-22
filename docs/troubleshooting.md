@@ -74,4 +74,4 @@ AccessDeniedException: assumed-role/pda-gha-infra/GitHubActions is not authorize
 1. 과금이 계속되므로 먼저 로컬 관리자 자격증명으로 `terraform destroy` (35 리소스, 193s) → ALB·ECS·VPC·공인 IP 0 확인.
 2. `infra` Role 에 `ecr:ListTagsForResource` 추가 → 빈 state 로 `destroy.yml` 재실행해 초기화·refresh 단계 권한 통과 확인.
 
-**배운 점** — 최소 권한 정책은 "쓰는 API"만이 아니라 Terraform provider 가 refresh 중 호출하는 읽기 API 까지 포함해야 한다. 정리(destroy) 경로는 실제로 한 번 돌려 봐야 검증된다. 실제 리소스 삭제 권한 전체는 다음 시연의 destroy 에서 다시 확인한다.
+**배운 점** — 최소 권한 정책은 "쓰는 API"만이 아니라 Terraform provider 가 refresh 중 호출하는 읽기 API 까지 포함해야 한다. 정리(destroy) 경로는 실제로 한 번 돌려 봐야 검증된다. → v3 시연 후 `destroy.yml` 로 실제 리소스 35개 삭제에 성공해 전체 경로를 검증했다.

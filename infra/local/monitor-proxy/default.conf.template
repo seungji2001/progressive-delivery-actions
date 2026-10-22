@@ -1,0 +1,20 @@
+# 모니터 페이지를 AWS ALB 와 같은 오리진으로 띄우는 프록시 (시연 녹화용)
+#   docker run --rm -p 8001:80 -e ALB_HOST=<alb-dns> \
+#     -v $PWD/infra/local/monitor-proxy:/etc/nginx/templates:ro \
+#     -v $PWD/monitor:/usr/share/nginx/monitor:ro nginx:1.28-alpine
+#   → http://localhost:8001/monitor/
+server {
+    listen 80;
+
+    location /monitor/ {
+        alias /usr/share/nginx/monitor/;
+    }
+
+    location / {
+        proxy_pass http://${ALB_HOST};
+        proxy_set_header Host ${ALB_HOST};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_next_upstream off;
+    }
+}
