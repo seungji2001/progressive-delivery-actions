@@ -1,8 +1,11 @@
 # GitHub Actions → AWS 인증은 OIDC 만 사용한다 (장기 Access Key 없음).
 #
 # 신뢰 정책의 sub 형식 주의:
-#   - job 에 environment 가 없으면  repo:<owner>/<repo>:ref:refs/heads/main
-#   - job 에 environment 가 있으면  repo:<owner>/<repo>:environment:<name>
+#   - job 에 environment 가 없으면  <prefix>:ref:refs/heads/main
+#   - job 에 environment 가 있으면  <prefix>:environment:<name>
+#   - <prefix> 는 레포 설정에 따라 이름 기반(repo:<owner>/<repo>) 또는
+#     immutable 형식(repo:<owner>@<owner_id>/<repo>@<repo_id>). immutable 형식은 레포 이름을
+#     재사용(삭제 후 재생성·이름 변경)하는 공격으로 Role 을 가로챌 수 없어 더 안전하다.
 # pull_request 이벤트(repo:<owner>/<repo>:pull_request)에는 어떤 Role 도 허용하지 않는다.
 #
 # runtime 스택은 시연 후 destroy/재생성되므로 ARN 이 바뀐다. 권한은 이름 기반 ARN 패턴으로 지정해
@@ -10,7 +13,7 @@
 
 locals {
   account_id = data.aws_caller_identity.current.account_id
-  repo       = "${var.github_owner}/${var.github_repo}"
+  sub_prefix = var.github_oidc_sub_prefix != "" ? var.github_oidc_sub_prefix : "repo:${var.github_owner}/${var.github_repo}"
   p          = var.name_prefix
   region     = var.aws_region
 }
@@ -34,9 +37,9 @@ locals {
 
 data "aws_iam_policy_document" "trust" {
   for_each = {
-    ci     = ["repo:${local.repo}:ref:refs/heads/main", "repo:${local.repo}:ref:refs/tags/v*"]
-    deploy = ["repo:${local.repo}:environment:preview", "repo:${local.repo}:environment:production"]
-    infra  = ["repo:${local.repo}:environment:infra"]
+    ci     = ["${local.sub_prefix}:ref:refs/heads/main", "${local.sub_prefix}:ref:refs/tags/v*"]
+    deploy = ["${local.sub_prefix}:environment:preview", "${local.sub_prefix}:environment:production"]
+    infra  = ["${local.sub_prefix}:environment:infra"]
   }
 
   statement {

@@ -2,6 +2,8 @@
 aws_region           = "ap-northeast-2"
 github_owner         = "<your-github-username>"
 github_repo          = "progressive-delivery-actions"
+# gh api repos/<owner>/<repo>/actions/oidc/customization/sub 의 sub_claim_prefix (immutable subject 레포)
+github_oidc_sub_prefix = "repo:<owner>@<owner_id>/progressive-delivery-actions@<repo_id>"
 state_bucket_name    = "pda-tfstate-<unique-suffix>"
 create_oidc_provider = true
 monthly_budget_usd   = 10

@@ -19,6 +19,17 @@ variable "github_repo" {
   default = "progressive-delivery-actions"
 }
 
+variable "github_oidc_sub_prefix" {
+  description = <<-EOT
+    OIDC 토큰 sub 의 prefix. 최근 생성된 레포는 GitHub 의 immutable subject 형식을 쓴다:
+      repo:<owner>@<owner_id>/<repo>@<repo_id>
+    확인: gh api repos/<owner>/<repo>/actions/oidc/customization/sub → sub_claim_prefix
+    비워 두면 이름 기반 형식(repo:<owner>/<repo>)을 쓴다.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "state_bucket_name" {
   description = "Terraform state S3 버킷 이름 (전역 유일)"
   type        = string
