@@ -47,14 +47,17 @@ jobs:
           path: app/build/reports/tests/test
 
       - name: shellcheck
+        if: inputs.ref == '' # 과거 태그 재빌드 시에는 앱 테스트만
         run: shellcheck -x scripts/*/*.sh tests/*.sh tests/fake-aws/aws
 
       - name: Gate logic tests (offline fixtures, fake aws)
+        if: inputs.ref == '' # 과거 태그 재빌드 시에는 앱 테스트만
         run: |
           scripts/aws/test-metric-gate.sh
           tests/test-canary-run.sh
 
       - name: actionlint
+        if: inputs.ref == '' # 과거 태그 재빌드 시에는 앱 테스트만
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
 
   image:

@@ -16,7 +16,10 @@ while [[ $# -gt 0 ]]; do
 		*) usage >&2; exit 2 ;;
 	esac
 done
-[[ "${color}" == blue || "${color}" == green ]] && [[ "${count}" =~ ^[0-9]+$ ]] || { usage >&2; exit 2; }
+if [[ "${color}" != blue && "${color}" != green ]] || ! [[ "${count}" =~ ^[0-9]+$ ]]; then
+	usage >&2
+	exit 2
+fi
 
 aws ecs update-service --cluster "${CLUSTER}" --service "$(service_of "${color}")" --desired-count "${count}" >/dev/null
 log "$(service_of "${color}") desired=${count}"
