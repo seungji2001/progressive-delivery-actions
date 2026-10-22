@@ -15,7 +15,8 @@ on:
 permissions: {}
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # 과거 태그 재빌드(workflow_dispatch ref)는 태그마다 별도 그룹: 같은 그룹이면 대기 실행이 서로를 취소한다
+  group: ci-${{ github.ref }}-${{ inputs.ref || 'push' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
